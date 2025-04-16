@@ -1,0 +1,82 @@
+app_name: "CheckHealthDO"
+
+server:
+  port: 8080
+  host: "0.0.0.0"
+
+agent:
+  auth:
+    user: "dbaDO"
+    pass: "dbaDO123!@#"
+
+database:
+  host: "localhost"
+  port: 3306
+  username: "root"
+  password: "DataOn24!!"
+  database: "information_schema"
+
+monitoring:
+  cpu:
+    enabled: true
+    warning_threshold: 80.0  # Ambang batas peringatan (dalam persen)
+    critical_threshold: 90.0 # Ambang batas kritis (dalam persen)
+    check_interval: 1        # Interval pengecekan RAM (dalam detik)
+    
+  memory:
+    enabled: true
+    warning_threshold: 80.0  # Ambang batas peringatan (dalam persen)
+    critical_threshold: 90.0 # Ambang batas kritis (dalam persen)
+    check_interval: 1        # Interval pengecekan RAM (dalam detik)
+  
+  disk:
+    enabled: true
+    warning_threshold: 80.0
+    critical_threshold: 90.0
+    check_interval: 1
+    monitored_paths:
+      - "/home"
+      - "/var/lib/mysql"
+      - "/var/lib/mysqlbinlogs"
+      - "/media/BACKUPDBDEV"
+
+  io_stats:
+    enabled: true
+    check_interval: 1
+
+  mariadb:
+    enabled: true
+    service_name: "mariadb" # Nama service MariaDB
+    auto_restart: true      # Add this line to enable auto-restart
+    restart_on_threshold: 
+      enabled: true         # Aktifkan restart otomatis saat memory mencapai critical
+      threshold: "critical" # Level at which to restart (warning/critical)
+    check_interval: 1       # Interval pengecekan MariaDB (dalam detik)
+    log_path: "/var/log/mysql/error.log" # Path ke log MariaDB
+
+notifications:
+  throttling:
+    enabled: true
+    cooldown_period: 10  # Jangan kirim notifikasi serupa dalam 5 menit (untuk warning)
+  
+  email:
+    enabled: true
+    smtp_server: "mail.dataon.com"
+    smtp_port: 587
+    use_tls: true
+    use_ssl: false
+    timeout: 10
+    sender_emails:
+      - email: "hadiyatna.muflihun@dataon.com"
+        password: "HadiyatnaMuflihun24!@#"
+    recipient_emails:
+      - "hadiyatna.muflihun@dataon.com"
+    retry_count: 3
+    retry_interval: 5
+    template_dir: "templates/email"
+logs:
+  enabled: true
+  level: "debug"     # Level logging (debug, info, warn, error)
+  file_path: "logs"  # Lokasi file log
+  format: "json"     # Format log (json atau text)
+  stdout: true       # Log ke console juga

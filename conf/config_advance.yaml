@@ -1,0 +1,142 @@
+app_name: "CheckHealthDO"
+
+server:
+  port: 8080
+  host: "0.0.0.0"
+  read_timeout: 30  # Timeout untuk read request dalam detik
+  write_timeout: 30  # Timeout untuk write response dalam detik
+  idle_timeout: 60  # Timeout untuk koneksi idle dalam detik
+  max_header_bytes: 1048576  # Max header size dalam bytes (1MB)
+
+database:
+  host: "localhost"
+  port: 3306
+  user: "root"
+  pass: "password"
+  name: "information_schema"
+  max_open_conns: 10  # Maksimum jumlah koneksi terbuka
+  max_idle_conns: 5   # Maksimum jumlah koneksi idle
+  conn_max_lifetime: 3600  # Maksimum lifetime koneksi dalam detik
+
+agent:
+  interval: 1  # Interval pengiriman data dalam detik
+  log_level: "debug"
+  auth:
+    user: "dboDO"
+    pass: "dboDO123!@#"
+
+monitoring:
+  memory:
+    enabled: true
+    warning_threshold: 80.0
+    critical_threshold: 90.0
+    check_interval: 1
+  
+  cpu:
+    enabled: true
+    warning_threshold: 70.0
+    critical_threshold: 90.0
+    check_interval: 1
+  
+  disk:
+    enabled: true
+    warning_threshold: 80.0
+    critical_threshold: 90.0
+    check_interval: 5
+    monitored_paths:
+      - "/"
+      - "/var"  # Ubah sesuai kebutuhan
+  
+  network:
+    enabled: true
+    check_interval: 1
+    interfaces:
+      - "eth0"  # Sesuaikan dengan interface yang digunakan
+  
+  io_stats:
+    enabled: true
+    check_interval: 2
+  
+  mariadb:
+    enabled: true
+    service_name: "mariadb"
+    restart_on_threshold:
+      enabled: true
+      threshold: "critical"
+    check_interval: 1
+    query_metrics:
+      enabled: true
+      slow_query_threshold: 2  # dalam detik
+    connection_metrics:
+      enabled: true
+      max_connections_warning: 80.0  # persen dari max_connections
+
+notifications:
+  throttling:
+    enabled: true
+    cooldown_period: 300  # jangan kirim notifikasi serupa dalam 5 menit
+    max_notifications_per_hour: 20  # maksimum notifikasi per jam
+  
+  email:
+    enabled: true
+    smtp_server: "mail.dataon.com"
+    smtp_port: 587
+    use_tls: true
+    use_ssl: false
+    timeout: 10
+    sender_emails:
+      - email: "hadiyatna.muflihun@dataon.com"
+        password: "HadiyatnaMuflihun24!@#"
+    recipient_emails:
+      - "hadiyatna.muflihun@dataon.com"
+    retry_count: 3
+    retry_interval: 5
+    template_dir: "templates/email"
+  
+  slack:
+    enabled: true
+    webhook_url: "https://hooks.slack.com/services/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"
+    template_dir: "templates/slack"
+  
+  telegram:
+    enabled: false
+    bot_token: ""  # Isi jika ingin mengaktifkan notifikasi Telegram
+    chat_id: ""
+    template_dir: "templates/telegram"
+
+logs:
+  enabled: true
+  level: "debug"  # debug, info, warn, error, fatal, panic
+  file_path: "logs"
+  max_size: 10
+  max_backups: 5
+  max_age: 30
+  compress: true
+  format: "json"  # json, text
+  colors: true
+  report_caller: false
+  stdout: false  # Set ke true untuk logging juga ke console
+  timestamp_format: "2006-01-02 15:04:05.000"
+
+api:
+  rate_limit: 100  # Request per menit
+  cors:
+    enabled: true
+    allowed_origins:
+      - "*"  # Ubah sesuai kebutuhan keamanan
+    allowed_methods:
+      - "GET"
+      - "POST"
+      - "PUT"
+      - "DELETE"
+  auth:
+    enabled: true
+    type: "basic"  # basic, jwt, api_key
+    jwt_secret: ""  # Isi jika menggunakan JWT
+    jwt_expiration: 86400  # 24 jam dalam detik
+
+websocket:
+  max_connections: 100
+  write_buffer_size: 1024
+  read_buffer_size: 1024
+  ping_interval: 30  # dalam detik
