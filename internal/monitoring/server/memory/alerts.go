@@ -6,19 +6,32 @@ import (
 	"CheckHealthDO/internal/pkg/logger"
 	"CheckHealthDO/internal/services/mariadb"
 	"fmt"
+	"time"
 )
 
 // AlertHandler handles memory alerts
 type AlertHandler struct {
-	monitor *Monitor
-	handler *alerts.Handler
+	monitor              *Monitor
+	handler              *alerts.Handler
+	lastWarningAlertTime time.Time
+	warningCount         int           // Track consecutive warnings
+	warningEscalation    int           // Number of warnings before escalating
+	pendingWarnings      []MemoryInfo  // For collecting multiple warnings
+	aggregationInterval  time.Duration // How long to collect alerts before sending
+	lastAggregationTime  time.Time     // When we last sent an aggregated alert
 }
 
 // NewAlertHandler creates a new alert handler
 func NewAlertHandler(monitor *Monitor) *AlertHandler {
 	return &AlertHandler{
-		monitor: monitor,
-		handler: alerts.NewHandler(monitor, nil), // Use default styles
+		monitor:              monitor,
+		handler:              alerts.NewHandler(monitor, nil), // Use default styles
+		lastWarningAlertTime: time.Time{},                     // Initialize to zero time
+		warningCount:         0,
+		warningEscalation:    5, // Only notify after 5 consecutive warnings
+		pendingWarnings:      make([]MemoryInfo, 0),
+		aggregationInterval:  5 * time.Minute,
+		lastAggregationTime:  time.Now(),
 	}
 }
 
@@ -26,10 +39,79 @@ func NewAlertHandler(monitor *Monitor) *AlertHandler {
 func (a *AlertHandler) HandleWarningAlert(info *MemoryInfo, statusChanged bool) {
 	var counter *int = &a.handler.SuppressedWarningCount
 
-	// For warning alert, check if we should throttle
+	// Get config with proper type assertion to determine cooldown
+	configInterface := a.monitor.GetConfig()
+	cfg, ok := configInterface.(*config.Config)
+
+	// Default cooldown of 5 minutes if can't get config
+	cooldownPeriod := 300
+	if ok && cfg.Notifications.Throttling.Enabled {
+		cooldownPeriod = cfg.Notifications.Throttling.CooldownPeriod
+	}
+
+	// Apply additional time-based throttling to warnings specifically
+	// This ensures we respect the cooldown even if the handler's throttling has issues
+	if !statusChanged && !a.lastWarningAlertTime.IsZero() {
+		sinceLastWarning := time.Since(a.lastWarningAlertTime)
+		if sinceLastWarning < time.Duration(cooldownPeriod)*time.Second {
+			logger.Debug("Suppressing memory warning due to local cooldown",
+				logger.Int("seconds_since_last", int(sinceLastWarning.Seconds())),
+				logger.Int("cooldown_period", cooldownPeriod))
+			*counter++
+			return
+		}
+	}
+
+	// If status changed, send immediately
+	if statusChanged {
+		// Reset counter on status change
+		a.warningCount = 0
+
+		// Send normal notification for status changes
+		a.sendWarningNotification(info, statusChanged, "")
+		return
+	}
+
+	// For non-status change warnings, use escalation
+	a.warningCount++
+
+	// Collect for aggregation
+	a.pendingWarnings = append(a.pendingWarnings, *info)
+
+	// Only send aggregated alert if enough time has passed
+	if time.Since(a.lastAggregationTime) >= a.aggregationInterval && len(a.pendingWarnings) > 0 {
+		// Create an aggregated message
+		a.sendAggregatedWarningAlert()
+		return
+	}
+
+	// Only send notification if we hit escalation threshold
+	if a.warningCount < a.warningEscalation {
+		logger.Debug("Memory warning suppressed due to escalation policy",
+			logger.Int("warning_count", a.warningCount),
+			logger.Int("escalation_threshold", a.warningEscalation))
+		return
+	}
+
+	// Add escalation information to the alert
+	escalationNote := fmt.Sprintf(`
+	<p><b>Note:</b> This alert was sent after %d consecutive warnings.</p>`,
+		a.warningCount)
+
+	// Send the alert with escalation information
+	a.sendWarningNotification(info, statusChanged, escalationNote)
+}
+
+// sendWarningNotification sends a warning notification for memory issues
+func (a *AlertHandler) sendWarningNotification(info *MemoryInfo, statusChanged bool, additionalNote string) {
+	// For warning alert, check if we should throttle using the handler's method
+	var counter *int = &a.handler.SuppressedWarningCount
 	if a.handler.ShouldThrottleAlert(statusChanged, counter, alerts.AlertTypeWarning) {
 		return
 	}
+
+	// Record the time we're sending this warning
+	a.lastWarningAlertTime = time.Now()
 
 	// Get server information using the common utility function
 	serverInfo := alerts.GetServerInfoForAlert()
@@ -37,8 +119,13 @@ func (a *AlertHandler) HandleWarningAlert(info *MemoryInfo, statusChanged bool) 
 	// Create table content for memory info
 	tableContent := a.createMemoryTableContent(info)
 
-	// Additional content for warning
+	// Base content for warning
 	additionalContent := `<p><b>Recommendation:</b> Please monitor the system closely if this condition persists.</p>`
+
+	// Add any additional note if provided
+	if additionalNote != "" {
+		additionalContent += additionalNote
+	}
 
 	// Get style for this alert type
 	style := a.handler.GetAlertStyle(alerts.AlertTypeWarning)
@@ -147,6 +234,9 @@ func (a *AlertHandler) HandleCriticalAlert(info *MemoryInfo, statusChanged bool)
 
 // HandleNormalAlert handles notifications when memory returns to normal state
 func (a *AlertHandler) HandleNormalAlert(info *MemoryInfo, statusChanged bool) {
+	// Reset escalation counter when returning to normal
+	a.warningCount = 0
+
 	// Only send notification if the status has changed
 	if !statusChanged {
 		return
@@ -270,4 +360,57 @@ func (a *AlertHandler) performRecoveryActions(info *MemoryInfo) {
 		// Log memory-intensive processes for additional context
 		logger.Info("Consider checking for memory-intensive processes if issues persist")
 	}
+}
+
+// sendAggregatedWarningAlert sends a single warning alert that summarizes multiple warnings
+func (a *AlertHandler) sendAggregatedWarningAlert() {
+	if len(a.pendingWarnings) == 0 {
+		return
+	}
+
+	// Find highest memory usage from collected warnings
+	highestUsage := float64(0)
+	var worstMemoryInfo *MemoryInfo
+
+	for i, info := range a.pendingWarnings {
+		if info.UsedMemoryPercentage > highestUsage {
+			highestUsage = info.UsedMemoryPercentage
+			worstMemoryInfo = &a.pendingWarnings[i]
+		}
+	}
+
+	// Create a summary message
+	additionalContent := fmt.Sprintf(`
+    <p><b>Aggregated Warning:</b> %d memory warnings detected in the last %d minutes.</p>
+    <p>Highest memory usage was %.2f%%</p>
+    <p><b>Recommendation:</b> Please monitor the system closely if this condition persists.</p>`,
+		len(a.pendingWarnings), int(a.aggregationInterval.Minutes()), highestUsage)
+
+	// Get server information using the common utility function
+	serverInfo := alerts.GetServerInfoForAlert()
+
+	// Create table content for memory info
+	tableContent := a.createMemoryTableContent(worstMemoryInfo)
+
+	// Get style for this alert type
+	style := a.handler.GetAlertStyle(alerts.AlertTypeWarning)
+
+	// Generate HTML
+	message := alerts.CreateAlertHTML(
+		alerts.AlertTypeWarning,
+		style,
+		"AGGREGATED MEMORY WARNING ALERT",
+		false,
+		tableContent,
+		serverInfo,
+		additionalContent,
+	)
+
+	// Send notification
+	a.handler.SendNotifications("Memory Warning Summary", message, "warning")
+	a.monitor.UpdateLastAlertTime()
+
+	// Update tracking state
+	a.lastAggregationTime = time.Now()
+	a.pendingWarnings = make([]MemoryInfo, 0) // Clear pending warnings
 }

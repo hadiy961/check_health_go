@@ -14,16 +14,17 @@ import (
 
 // Monitor handles periodic memory monitoring
 type Monitor struct {
-	config        *config.Config
-	ticker        *time.Ticker
-	stopChan      chan struct{}
-	isRunning     bool
-	mutex         sync.Mutex
-	lastInfo      *MemoryInfo
-	lastAlertTime time.Time
-	emailManager  *notifications.EmailManager
-	checkCount    int // Counter for reducing log frequency
-	alertHandler  *AlertHandler
+	config          *config.Config
+	ticker          *time.Ticker
+	stopChan        chan struct{}
+	isRunning       bool
+	mutex           sync.Mutex
+	lastInfo        *MemoryInfo
+	lastAlertTime   time.Time
+	emailManager    *notifications.EmailManager
+	checkCount      int // Counter for reducing log frequency
+	alertHandler    *AlertHandler
+	summaryReporter *SummaryReporter // Add this field
 }
 
 // NewMonitor creates a new memory monitor instance
@@ -34,6 +35,7 @@ func NewMonitor(cfg *config.Config) *Monitor {
 		emailManager: notifications.NewEmailManager(cfg),
 	}
 	m.alertHandler = NewAlertHandler(m)
+	m.summaryReporter = NewSummaryReporter(m, cfg) // Initialize the summary reporter
 	return m
 }
 
@@ -166,6 +168,9 @@ func (m *Monitor) checkMemory() {
 	if handler := registry.GetMemoryHandler(); handler != nil {
 		registry.BroadcastMemory(combinedMsg)
 	}
+
+	// Record the event for summary reporting
+	m.summaryReporter.RecordEvent(info)
 
 	// Process alerts based on status
 	switch info.MemoryStatus {
