@@ -106,7 +106,7 @@ func Init(cfg *config.Config) error {
 	Sugar = Log.Sugar()
 
 	// Log initialization
-	Sugar.Infof("Logger initialized with level: %s, format: %s", cfg.Logs.Level, cfg.Logs.Format)
+	// Sugar.Infof("Logger initialized with level: %s, format: %s", cfg.Logs.Level, cfg.Logs.Format)
 
 	return nil
 }

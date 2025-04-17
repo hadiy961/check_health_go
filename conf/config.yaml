@@ -34,12 +34,7 @@ monitoring:
     warning_threshold: 80.0
     critical_threshold: 90.0
     check_interval: 1
-    monitored_paths:
-      - "/home"
-      - "/var/lib/mysql"
-      - "/var/lib/mysqlbinlogs"
-      - "/media/BACKUPDBDEV"
-
+    
   io_stats:
     enabled: true
     check_interval: 1
@@ -77,7 +72,7 @@ notifications:
 
 logs:
   enabled: true
-  level: "debug"     # Level logging (debug, info, warn, error)
+  level: "info"     # Level logging (debug, info, warn, error)
   file_path: "logs"  # Lokasi file log
   format: "json"     # Format log (json atau text)
   stdout: true       # Log ke console juga
