@@ -74,9 +74,26 @@ notifications:
     retry_count: 3
     retry_interval: 5
     template_dir: "templates/email"
+
 logs:
   enabled: true
   level: "debug"     # Level logging (debug, info, warn, error)
   file_path: "logs"  # Lokasi file log
   format: "json"     # Format log (json atau text)
   stdout: true       # Log ke console juga
+
+api:
+  rate_limit: 100    # Request per menit
+  cors:
+    enabled: true
+    allowed_origins:
+      - "*"         # Bisa diganti dengan domain spesifik untuk keamanan
+    allowed_methods:
+      - "GET"
+      - "POST"
+      - "PUT"
+      - "DELETE"
+  auth:
+    enabled: true
+    jwt_secret: "CheckHealthDO-Test-2025"  # Kunci rahasia untuk signing JWT
+    jwt_expiration: 86400  # Masa berlaku token (dalam detik) - 24 jam

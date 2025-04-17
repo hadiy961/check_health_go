@@ -16,6 +16,7 @@ type Config struct {
 	Monitoring    MonitoringConfig    `yaml:"monitoring"`
 	Notifications NotificationsConfig `yaml:"notifications"`
 	Logs          LogsConfig          `yaml:"logs"`
+	API           API                 `yaml:"api"` // Add API config
 }
 
 // ServerConfig holds server related configuration

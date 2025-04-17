@@ -2,8 +2,10 @@ package auth
 
 import (
 	"CheckHealthDO/internal/pkg/config"
+	"CheckHealthDO/internal/pkg/jwt"
 	"CheckHealthDO/internal/pkg/logger"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -16,8 +18,8 @@ func (r *AuthRegistrar) Register(engine *gin.Engine, config *config.Config) erro
 	// Create auth group for API authentication endpoints
 	authGroup := engine.Group("/api/auth")
 	{
-		// Token endpoint
-		authGroup.POST("/token", func(c *gin.Context) {
+		// Login endpoint
+		authGroup.POST("/login", func(c *gin.Context) {
 			var credentials struct {
 				Username string `json:"username"`
 				Password string `json:"password"`
@@ -29,9 +31,23 @@ func (r *AuthRegistrar) Register(engine *gin.Engine, config *config.Config) erro
 			}
 
 			if credentials.Username == config.Agent.Auth.User && credentials.Password == config.Agent.Auth.Pass {
+				// Generate JWT token
+				tokenExpiration := 24 * time.Hour
+				if config.API.Auth.JWTExpiration > 0 {
+					tokenExpiration = time.Duration(config.API.Auth.JWTExpiration) * time.Second
+				}
+
+				token, err := jwt.GenerateToken(credentials.Username, config.API.Auth.JWTSecret, tokenExpiration)
+				if err != nil {
+					logger.Error("Failed to generate token", logger.String("error", err.Error()))
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
+					return
+				}
+
 				c.JSON(http.StatusOK, gin.H{
-					"status": "success",
-					"token":  "sample-token", // Replace with actual token generation
+					"status":     "success",
+					"token":      token,
+					"expires_in": tokenExpiration.Seconds(),
 				})
 			} else {
 				logger.Warn("Failed authentication attempt",
