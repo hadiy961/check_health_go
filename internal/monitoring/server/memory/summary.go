@@ -76,11 +76,47 @@ func (s *SummaryReporter) sendSummaryReport() {
 		{Label: "Peak Memory Usage", Value: fmt.Sprintf("%.2f%%", s.peakMemoryUsage)},
 	}
 
+	// Add trend information if available
+	trend, percentChange := s.monitor.getMemoryTrend()
+	tableRows = append(tableRows, alerts.TableRow{
+		Label: "Memory Usage Trend",
+		Value: fmt.Sprintf("%s (%.1f%% change)", trend, percentChange),
+	})
+
+	// Add current memory status
+	if currentInfo := s.monitor.GetLastMemoryInfo(); currentInfo != nil {
+		tableRows = append(tableRows, alerts.TableRow{
+			Label: "Current Memory Status",
+			Value: fmt.Sprintf("%s (%.2f%%)", currentInfo.MemoryStatus, currentInfo.UsedMemoryPercentage),
+		})
+	}
+
 	tableHTML := alerts.CreateTable(tableRows)
 
 	// Generate HTML using the normal style
 	styles := alerts.DefaultStyles()
 	style := styles[alerts.AlertTypeNormal]
+
+	// Add recommendation based on collected data
+	var recommendation string
+	if s.criticalEvents > 5 {
+		recommendation = `
+		<div style="background-color: #f2dede; border-left: 5px solid #d9534f; padding: 10px; margin: 10px 0;">
+			<p><b>URGENT ACTION RECOMMENDED:</b> Multiple critical memory events detected. 
+			Consider increasing system memory, identifying memory leaks, or optimizing application memory usage.</p>
+		</div>`
+	} else if s.warningEvents > 10 {
+		recommendation = `
+		<div style="background-color: #fcf8e3; border-left: 5px solid #faebcc; padding: 10px; margin: 10px 0;">
+			<p><b>ACTION RECOMMENDED:</b> Frequent memory warnings detected.
+			Monitor memory-intensive applications and consider optimization if the trend continues.</p>
+		</div>`
+	} else {
+		recommendation = `
+		<div style="background-color: #dff0d8; border-left: 5px solid #3c763d; padding: 10px; margin: 10px 0;">
+			<p><b>SYSTEM HEALTHY:</b> Memory usage appears to be within normal parameters.</p>
+		</div>`
+	}
 
 	message := alerts.CreateAlertHTML(
 		alerts.AlertTypeNormal,
@@ -89,7 +125,7 @@ func (s *SummaryReporter) sendSummaryReport() {
 		false,
 		tableHTML,
 		serverInfo,
-		"<p>This is an automated summary of memory usage activity.</p>",
+		"<p>This is an automated summary of memory usage activity.</p>"+recommendation,
 	)
 
 	// Get email manager and send

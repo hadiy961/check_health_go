@@ -6,19 +6,24 @@ import (
 	"CheckHealthDO/internal/pkg/logger"
 	"CheckHealthDO/internal/services/mariadb"
 	"fmt"
+	"strings"
 	"time"
+
+	"github.com/shirou/gopsutil/load"
 )
 
 // AlertHandler handles memory alerts
 type AlertHandler struct {
-	monitor              *Monitor
-	handler              *alerts.Handler
-	lastWarningAlertTime time.Time
-	warningCount         int           // Track consecutive warnings
-	warningEscalation    int           // Number of warnings before escalating
-	pendingWarnings      []MemoryInfo  // For collecting multiple warnings
-	aggregationInterval  time.Duration // How long to collect alerts before sending
-	lastAggregationTime  time.Time     // When we last sent an aggregated alert
+	monitor               *Monitor
+	handler               *alerts.Handler
+	lastWarningAlertTime  time.Time
+	lastCriticalAlertTime time.Time
+	lastNormalAlertTime   time.Time
+	warningCount          int           // Track consecutive warnings
+	warningEscalation     int           // Number of warnings before escalating
+	pendingWarnings       []MemoryInfo  // For collecting multiple warnings
+	aggregationInterval   time.Duration // How long to collect alerts before sending
+	lastAggregationTime   time.Time     // When we last sent an aggregated alert
 }
 
 // NewAlertHandler creates a new alert handler
@@ -49,12 +54,21 @@ func (a *AlertHandler) HandleWarningAlert(info *MemoryInfo, statusChanged bool) 
 		cooldownPeriod = cfg.Notifications.Throttling.CooldownPeriod
 	}
 
+	// Log the attempted alert regardless of whether it's throttled
+	if statusChanged {
+		logger.Info("Memory entered warning state",
+			logger.Float64("usage_percent", info.UsedMemoryPercentage),
+			logger.String("status", info.MemoryStatus),
+			logger.String("timestamp", time.Now().Format(time.RFC3339)),
+			logger.Bool("notification_will_be_sent", time.Since(a.lastWarningAlertTime) >= time.Duration(cooldownPeriod)*time.Second))
+	}
+
 	// Apply additional time-based throttling to warnings specifically
 	// This ensures we respect the cooldown even if the handler's throttling has issues
 	if !statusChanged && !a.lastWarningAlertTime.IsZero() {
 		sinceLastWarning := time.Since(a.lastWarningAlertTime)
 		if sinceLastWarning < time.Duration(cooldownPeriod)*time.Second {
-			logger.Debug("Suppressing memory warning due to local cooldown",
+			logger.Debug("Suppressing memory warning notification due to cooldown",
 				logger.Int("seconds_since_last", int(sinceLastWarning.Seconds())),
 				logger.Int("cooldown_period", cooldownPeriod))
 			*counter++
@@ -127,6 +141,19 @@ func (a *AlertHandler) sendWarningNotification(info *MemoryInfo, statusChanged b
 		additionalContent += additionalNote
 	}
 
+	// Get trend information directly from the monitor
+	trend, percentChange := a.monitor.getMemoryTrend()
+
+	// Customize additional content based on trend
+	if strings.Contains(trend, "increasing") {
+		trendHTML := fmt.Sprintf(`
+		<div style="background-color: #fcf8e3; border-left: 5px solid #faebcc; padding: 10px; margin: 10px 0;">
+			<p><b>TREND ALERT:</b> Memory usage is %s (%.1f%% change over monitoring period).</p>
+			<p>This suggests a potential memory leak or growing resource usage that may require investigation.</p>
+		</div>`, trend, percentChange)
+		additionalContent += trendHTML
+	}
+
 	// Get style for this alert type
 	style := a.handler.GetAlertStyle(alerts.AlertTypeWarning)
 
@@ -150,9 +177,35 @@ func (a *AlertHandler) sendWarningNotification(info *MemoryInfo, statusChanged b
 func (a *AlertHandler) HandleCriticalAlert(info *MemoryInfo, statusChanged bool) {
 	var counter *int = &a.handler.SuppressedCriticalCount
 
+	// Get config with proper type assertion to determine cooldown
+	configInterface := a.monitor.GetConfig()
+	cfg, ok := configInterface.(*config.Config)
+
+	// Default cooldown of 5 minutes if can't get config
+	cooldownPeriod := 300
+	if ok && cfg.Notifications.Throttling.Enabled {
+		cooldownPeriod = cfg.Notifications.Throttling.CooldownPeriod
+	}
+
+	// Log the attempted alert regardless of whether it's throttled
+	if statusChanged {
+		logger.Info("Memory entered critical state",
+			logger.Float64("usage_percent", info.UsedMemoryPercentage),
+			logger.String("status", info.MemoryStatus),
+			logger.String("timestamp", time.Now().Format(time.RFC3339)),
+			logger.Bool("notification_will_be_sent", time.Since(a.lastCriticalAlertTime) >= time.Duration(cooldownPeriod)*time.Second))
+	}
+
 	// For critical alert, check if we should throttle
-	if a.handler.ShouldThrottleAlert(statusChanged, counter, alerts.AlertTypeCritical) {
-		return
+	if !a.lastCriticalAlertTime.IsZero() {
+		sinceLastCritical := time.Since(a.lastCriticalAlertTime)
+		if sinceLastCritical < time.Duration(cooldownPeriod)*time.Second {
+			logger.Debug("Suppressing memory critical notification due to cooldown",
+				logger.Int("seconds_since_last", int(sinceLastCritical.Seconds())),
+				logger.Int("cooldown_period", cooldownPeriod))
+			*counter++
+			return
+		}
 	}
 
 	// Get server information using the common utility function
@@ -162,8 +215,6 @@ func (a *AlertHandler) HandleCriticalAlert(info *MemoryInfo, statusChanged bool)
 	tableContent := a.createMemoryTableContent(info)
 
 	// Get config with proper type assertion
-	configInterface := a.monitor.GetConfig()
-	cfg, ok := configInterface.(*config.Config)
 	if !ok {
 		logger.Error("Failed to convert config to *config.Config in HandleCriticalAlert")
 		// Use a default notification without custom recovery actions
@@ -189,6 +240,7 @@ func (a *AlertHandler) HandleCriticalAlert(info *MemoryInfo, statusChanged bool)
 		// Send notification
 		a.handler.SendNotifications("CRITICAL Memory Alert", message, "critical")
 		a.monitor.UpdateLastAlertTime()
+		a.lastCriticalAlertTime = time.Now()
 		return
 	}
 
@@ -206,6 +258,15 @@ func (a *AlertHandler) HandleCriticalAlert(info *MemoryInfo, statusChanged bool)
 			<p>The system is attempting to automatically restart the MariaDB service 
 			to free up memory resources and maintain stability.</p>
 		</div>`
+	}
+
+	// Add system load information if available
+	if loadAvg, err := getSystemLoadAvg(); err == nil && len(loadAvg) >= 3 {
+		additionalContent += fmt.Sprintf(`
+		<div style="background-color: #f2dede; border-left: 5px solid #d9534f; padding: 10px; margin: 10px 0;">
+			<p><b>SYSTEM LOAD:</b> 1-min: %.2f, 5-min: %.2f, 15-min: %.2f</p>
+			<p>This indicates the overall system pressure and may help diagnose the memory issue.</p>
+		</div>`, loadAvg[0], loadAvg[1], loadAvg[2])
 	}
 
 	// Get style for this alert type
@@ -230,6 +291,9 @@ func (a *AlertHandler) HandleCriticalAlert(info *MemoryInfo, statusChanged bool)
 	if cfg.Monitoring.MariaDB.RestartOnThreshold.Enabled {
 		a.performRecoveryActions(info)
 	}
+
+	// Update the last critical alert time
+	a.lastCriticalAlertTime = time.Now()
 }
 
 // HandleNormalAlert handles notifications when memory returns to normal state
@@ -240,6 +304,34 @@ func (a *AlertHandler) HandleNormalAlert(info *MemoryInfo, statusChanged bool) {
 	// Only send notification if the status has changed
 	if !statusChanged {
 		return
+	}
+
+	// Get config with proper type assertion to determine cooldown
+	configInterface := a.monitor.GetConfig()
+	cfg, ok := configInterface.(*config.Config)
+
+	// Default cooldown of 5 minutes if can't get config
+	cooldownPeriod := 300
+	if ok && cfg.Notifications.Throttling.Enabled {
+		cooldownPeriod = cfg.Notifications.Throttling.CooldownPeriod
+	}
+
+	// Log the return to normal regardless of whether notification is throttled
+	logger.Info("Memory returned to normal state",
+		logger.Float64("usage_percent", info.UsedMemoryPercentage),
+		logger.String("status", info.MemoryStatus),
+		logger.String("timestamp", time.Now().Format(time.RFC3339)),
+		logger.Bool("notification_will_be_sent", time.Since(a.lastNormalAlertTime) >= time.Duration(cooldownPeriod)*time.Second))
+
+	// Apply throttling even for normal status
+	if !a.lastNormalAlertTime.IsZero() {
+		sinceLastNormal := time.Since(a.lastNormalAlertTime)
+		if sinceLastNormal < time.Duration(cooldownPeriod)*time.Second {
+			logger.Debug("Suppressing memory normal notification due to cooldown",
+				logger.Int("seconds_since_last", int(sinceLastNormal.Seconds())),
+				logger.Int("cooldown_period", cooldownPeriod))
+			return
+		}
 	}
 
 	// Get server information using the common utility function
@@ -271,6 +363,9 @@ func (a *AlertHandler) HandleNormalAlert(info *MemoryInfo, statusChanged bool) {
 	// Send notification
 	a.handler.SendNotifications("Memory Status Normalized", message, "info")
 	a.monitor.UpdateLastAlertTime()
+
+	// Update the last normal alert time
+	a.lastNormalAlertTime = time.Now()
 }
 
 // Helper method to create memory-specific table content
@@ -295,6 +390,42 @@ func (a *AlertHandler) createMemoryTableContent(info *MemoryInfo) string {
 		{Label: "Used Memory", Value: fmt.Sprintf("%.2f GB (%.2f%%)", usedMemoryGB, info.UsedMemoryPercentage)},
 		{Label: "Total Memory", Value: fmt.Sprintf("%.2f GB", totalMemoryGB)},
 		{Label: "Free Memory", Value: fmt.Sprintf("%.2f GB (%.2f%%)", freeMemoryGB, info.FreeMemoryPercentage)},
+	}
+
+	// Add trend information directly from the monitor
+	trend, percentChange := a.monitor.getMemoryTrend()
+	tableRows = append(tableRows, alerts.TableRow{
+		Label: "Memory Trend",
+		Value: fmt.Sprintf("%s (%.1f%% change)", trend, percentChange),
+	})
+
+	// Add any available memory info if present
+	availableMemory := GetAvailableMemory()
+	if availableMemory > 0 {
+		availableMemoryGB := float64(availableMemory) / 1024 / 1024 / 1024
+		tableRows = append(tableRows, alerts.TableRow{
+			Label: "Available Memory",
+			Value: fmt.Sprintf("%.2f GB (%.2f%%)", availableMemoryGB, float64(availableMemory)/float64(info.TotalMemory)*100.0),
+		})
+	}
+
+	// Add cached memory information since it's often reclaimed when needed
+	if info.CachedMemory > 0 {
+		cachedMemoryGB := float64(info.CachedMemory) / 1024 / 1024 / 1024
+		tableRows = append(tableRows, alerts.TableRow{
+			Label: "Cached Memory",
+			Value: fmt.Sprintf("%.2f GB", cachedMemoryGB),
+		})
+	}
+
+	// Add active/inactive memory
+	if info.ActiveMemory > 0 && info.InactiveMemory > 0 {
+		activeMemoryGB := float64(info.ActiveMemory) / 1024 / 1024 / 1024
+		inactiveMemoryGB := float64(info.InactiveMemory) / 1024 / 1024 / 1024
+		tableRows = append(tableRows, alerts.TableRow{
+			Label: "Active/Inactive Memory",
+			Value: fmt.Sprintf("%.2f GB / %.2f GB", activeMemoryGB, inactiveMemoryGB),
+		})
 	}
 
 	// Add swap information if available
@@ -371,7 +502,6 @@ func (a *AlertHandler) sendAggregatedWarningAlert() {
 	// Find highest memory usage from collected warnings
 	highestUsage := float64(0)
 	var worstMemoryInfo *MemoryInfo
-
 	for i, info := range a.pendingWarnings {
 		if info.UsedMemoryPercentage > highestUsage {
 			highestUsage = info.UsedMemoryPercentage
@@ -413,4 +543,13 @@ func (a *AlertHandler) sendAggregatedWarningAlert() {
 	// Update tracking state
 	a.lastAggregationTime = time.Now()
 	a.pendingWarnings = make([]MemoryInfo, 0) // Clear pending warnings
+}
+
+// Helper function to get system load average
+func getSystemLoadAvg() ([]float64, error) {
+	loadInfo, err := load.Avg()
+	if err != nil {
+		return nil, err
+	}
+	return []float64{loadInfo.Load1, loadInfo.Load5, loadInfo.Load15}, nil
 }
