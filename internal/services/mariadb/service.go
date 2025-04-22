@@ -136,5 +136,24 @@ func StopMariaDBService(serviceName string) error {
 
 // RestartMariaDBService restarts the MariaDB service
 func RestartMariaDBService(serviceName string) error {
-	return ControlMariaDBService(serviceName, "restart")
+	// Log the restart attempt
+	logger.Info("Attempting to restart MariaDB service",
+		logger.String("service", serviceName))
+
+	// Use systemctl to restart the service
+	cmd := exec.Command("systemctl", "restart", serviceName)
+	output, err := cmd.CombinedOutput()
+
+	if err != nil {
+		logger.Error("Failed to restart MariaDB service",
+			logger.String("service", serviceName),
+			logger.String("error", err.Error()),
+			logger.String("output", string(output)))
+		return fmt.Errorf("failed to restart MariaDB service: %w", err)
+	}
+
+	logger.Info("Successfully restarted MariaDB service",
+		logger.String("service", serviceName))
+
+	return nil
 }

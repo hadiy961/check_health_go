@@ -66,14 +66,14 @@ func (s *StatusLogger) LogStatusChange(previous, current string, usage float64) 
 		timestamp, previous, current, usage, trend, loadString, topProcessesStr)
 
 	// Log to application log with additional context
-	logger.Info("CPU status transition",
-		logger.String("previous", previous),
-		logger.String("current", current),
-		logger.Float64("usage_percent", usage),
-		logger.String("timestamp", timestamp),
-		logger.String("trend", trend),
-		logger.String("load_avg", loadString),
-		logger.String("top_processes", topProcessesStr))
+	// logger.Info("CPU status transition",
+	// 	logger.String("previous", previous),
+	// 	logger.String("current", current),
+	// 	logger.Float64("usage_percent", usage),
+	// 	logger.String("timestamp", timestamp),
+	// 	logger.String("trend", trend),
+	// 	logger.String("load_avg", loadString),
+	// 	logger.String("top_processes", topProcessesStr))
 
 	// Log to dedicated file
 	s.mutex.Lock()

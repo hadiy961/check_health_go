@@ -6,6 +6,10 @@ import (
 	"CheckHealthDO/internal/pkg/logger"
 	"CheckHealthDO/internal/services/mariadb"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/shirou/gopsutil/load"
@@ -220,16 +224,6 @@ func (a *AlertHandler) HandleCriticalAlert(info *MemoryInfo, statusChanged bool)
 	// Increment critical event counter
 	a.currentCriticalCount++
 
-	// Get config with proper type assertion to determine cooldown
-	configInterface := a.monitor.GetConfig()
-	cfg, ok := configInterface.(*config.Config)
-
-	// Default cooldown of 5 minutes if can't get config
-	cooldownPeriod := 300
-	if ok && cfg.Notifications.Throttling.Enabled {
-		cooldownPeriod = cfg.Notifications.Throttling.CooldownPeriod
-	}
-
 	// Always log the event regardless of whether notification is throttled
 	if statusChanged {
 		logger.Info("Memory entered critical state",
@@ -243,25 +237,8 @@ func (a *AlertHandler) HandleCriticalAlert(info *MemoryInfo, statusChanged bool)
 	// Store current info for comparison in next cycle
 	a.lastInfo = info
 
-	// For critical events, require consecutive occurrences before alerting
-	// Unless this is a status change from normal directly to critical
-	if !statusChanged && a.currentCriticalCount < a.criticalThrottleCount {
-		logger.Info("Suppressing critical alert until threshold reached",
-			logger.Int("current_count", a.currentCriticalCount),
-			logger.Int("threshold", a.criticalThrottleCount))
-		return
-	}
-
-	// Apply throttling even for status changes
-	if !a.lastCriticalAlertTime.IsZero() {
-		sinceLastCritical := time.Since(a.lastCriticalAlertTime)
-		if sinceLastCritical < time.Duration(cooldownPeriod)*time.Second {
-			logger.Debug("Suppressing memory critical notification due to cooldown",
-				logger.Int("seconds_since_last", int(sinceLastCritical.Seconds())),
-				logger.Int("cooldown_period", cooldownPeriod))
-			return
-		}
-	}
+	// For critical memory alerts, we don't want to throttle or require consecutive events
+	// This ensures immediate notification of critical memory conditions
 
 	// Get server information using the common utility function
 	serverInfo := alerts.GetServerInfoForAlert()
@@ -270,6 +247,8 @@ func (a *AlertHandler) HandleCriticalAlert(info *MemoryInfo, statusChanged bool)
 	tableContent := a.createMemoryTableContent(info)
 
 	// Get config with proper type assertion
+	configInterface := a.monitor.GetConfig()
+	cfg, ok := configInterface.(*config.Config)
 	if !ok {
 		logger.Error("Failed to convert config to *config.Config in HandleCriticalAlert")
 		// Use a default notification without custom recovery actions
@@ -538,12 +517,69 @@ func (a *AlertHandler) performRecoveryActions(info *MemoryInfo) {
 				logger.String("service", serviceName),
 				logger.Float64("memory_usage", info.UsedMemoryPercentage))
 
-			err := mariadb.RestartMariaDBService(serviceName)
+			// Instead of creating temporary files, we'll:
+			// 1. Log a very distinctive message to system journal that we can search for later
+			// 2. Record the PID of MariaDB before restart to compare after
+
+			// Get current PID of MariaDB to detect actual process restart later
+			pidCmd := exec.Command("bash", "-c", "pgrep -f mysqld")
+			pidOutput, _ := pidCmd.CombinedOutput()
+			oldPid := strings.TrimSpace(string(pidOutput))
+
+			// Create persistent log directory if it doesn't exist
+			logDir := "logs"
+			os.MkdirAll(logDir, 0755)
+			logFile := filepath.Join(logDir, "mariadb_restarts.log")
+
+			// Log the event to a persistent location in the app logs directory
+			logEntry := fmt.Sprintf("[%s] Memory Critical Auto-Recovery: Memory usage was %.2f%% - PID before restart: %s\n",
+				time.Now().Format(time.RFC3339), info.UsedMemoryPercentage, oldPid)
+
+			// Append to log file (create if doesn't exist)
+			f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if err == nil {
+				f.WriteString(logEntry)
+				f.Close()
+			}
+
+			// Log to system journal with unique identifier
+			restartMsg := fmt.Sprintf("CHECKHEALTHDO_MEMORY_AUTO_RECOVERY_%s: Restarting MariaDB due to critical memory usage (%.2f%%)",
+				time.Now().Format("20060102_150405"), info.UsedMemoryPercentage)
+			journalCmd := exec.Command("logger", "-t", "CheckHealthDO", restartMsg)
+			journalCmd.Run()
+
+			// Perform the actual restart
+			err = mariadb.RestartMariaDBService(serviceName)
 			if err != nil {
 				logger.Error("Failed to restart MariaDB service",
 					logger.String("error", err.Error()))
 			} else {
-				logger.Info("Successfully restarted MariaDB service")
+				logger.Info("Successfully restarted MariaDB service due to memory conditions")
+
+				// Verify the restart by checking if the PID changed
+				time.Sleep(2 * time.Second) // Give it a moment to restart
+
+				newPidCmd := exec.Command("bash", "-c", "pgrep -f mysqld")
+				newPidOutput, _ := newPidCmd.CombinedOutput()
+				newPid := strings.TrimSpace(string(newPidOutput))
+
+				if oldPid != newPid {
+					restartCompletedMsg := fmt.Sprintf("CHECKHEALTHDO_MEMORY_AUTO_RECOVERY_COMPLETED_%s: PID before: %s, PID after: %s",
+						time.Now().Format("20060102_150405"), oldPid, newPid)
+					logger.Info(restartCompletedMsg)
+
+					// Log completion to system journal too
+					journalCmd = exec.Command("logger", "-t", "CheckHealthDO", restartCompletedMsg)
+					journalCmd.Run()
+
+					// Update our log file with completion info
+					f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+					if err == nil {
+						f.WriteString(fmt.Sprintf("[%s] Restart completed - PID after restart: %s\n",
+							time.Now().Format(time.RFC3339), newPid))
+						f.Close()
+					}
+				}
 			}
 		} else {
 			logger.Warn("MariaDB service is not running, no restart performed",

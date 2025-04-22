@@ -13,7 +13,6 @@ import (
 type Notifier struct {
 	config       *config.Config
 	emailManager alerts.NotificationManager
-	lastNotified map[string]time.Time // Track last notification time by type
 }
 
 // NewNotifier creates a new notifier
@@ -21,32 +20,11 @@ func NewNotifier(cfg *config.Config) *Notifier {
 	return &Notifier{
 		config:       cfg,
 		emailManager: alerts.NewEmailNotifier(cfg),
-		lastNotified: make(map[string]time.Time),
 	}
 }
 
 // SendStatusChangeNotification sends notifications about MariaDB status changes
 func (n *Notifier) SendStatusChangeNotification(status *Status, reason string) {
-	// Check if throttling is enabled and if we should throttle this notification
-	if n.config.Notifications.Throttling.Enabled {
-		// Create notification key
-		notifKey := fmt.Sprintf("mariadb-status-%s", status.Status)
-
-		// Check if we've sent this type of notification recently
-		if lastTime, exists := n.lastNotified[notifKey]; exists {
-			cooldownPeriod := time.Duration(n.config.Notifications.Throttling.CooldownPeriod) * time.Second
-			if time.Since(lastTime) < cooldownPeriod {
-				logger.Info("Throttling MariaDB status notification",
-					logger.String("status", status.Status),
-					logger.String("reason", "cooldown period not elapsed"))
-				return
-			}
-		}
-
-		// Update last notification time
-		n.lastNotified[notifKey] = time.Now()
-	}
-
 	// Get server information
 	serverInfo := alerts.GetServerInfoForAlert()
 
@@ -55,11 +33,35 @@ func (n *Notifier) SendStatusChangeNotification(status *Status, reason string) {
 	var subject string
 
 	if status.Status == "stopped" {
-		alertType = alerts.AlertTypeCritical
-		subject = "CRITICAL: MariaDB Service Stopped"
-	} else {
-		alertType = alerts.AlertTypeNormal
-		subject = "MariaDB Service Running"
+		// Customize based on stop reason for more specific alerts
+		if strings.Contains(status.StopReason, "Manual Systemctl Stop") {
+			alertType = alerts.AlertTypeWarning // It's not critical if manually stopped
+			subject = "NOTICE: MariaDB Service Manually Stopped"
+		} else if strings.Contains(status.StopReason, "Memory Critical Auto-Recovery") {
+			alertType = alerts.AlertTypeWarning
+			subject = "NOTICE: MariaDB Service Restarted Due to Memory Issues"
+		} else if strings.Contains(status.StopReason, "Out of Memory") {
+			alertType = alerts.AlertTypeCritical
+			subject = "CRITICAL: MariaDB Service Killed by OOM"
+		} else {
+			alertType = alerts.AlertTypeCritical
+			subject = "CRITICAL: MariaDB Service Unexpectedly Stopped"
+		}
+	} else { // running
+		// Customize based on start reason
+		if strings.Contains(reason, "manually started") {
+			alertType = alerts.AlertTypeNormal
+			subject = "INFO: MariaDB Service Manually Started"
+		} else if strings.Contains(reason, "system startup") || strings.Contains(reason, "boot process") {
+			alertType = alerts.AlertTypeNormal
+			subject = "INFO: MariaDB Service Started During System Boot"
+		} else if strings.Contains(reason, "memory-related shutdown") {
+			alertType = alerts.AlertTypeWarning
+			subject = "NOTICE: MariaDB Service Recovered After Memory Issues"
+		} else {
+			alertType = alerts.AlertTypeNormal
+			subject = "INFO: MariaDB Service Running"
+		}
 	}
 
 	// Create table content for MariaDB status info
@@ -116,12 +118,55 @@ func (n *Notifier) createMariaDBStatusTable(status *Status, reason string) strin
 
 	statusLine := alerts.CreateStatusLine(statusClass, statusText)
 
-	// Create table rows
+	// Add common info first
 	tableRows := []alerts.TableRow{
-		{Label: "Previous Status", Value: status.PreviousStatus},
-		{Label: "Current Status", Value: status.Status},
-		{Label: "Timestamp", Value: status.Timestamp.Format(time.RFC1123)},
-		{Label: "Detected Reason", Value: reason},
+		{Label: "Status", Value: statusText},
+		{Label: "Service Name", Value: status.ServiceName},
+		{Label: "Timestamp", Value: status.Timestamp.Format(time.RFC3339)},
+	}
+
+	// Add reason for status change if available
+	if reason != "" {
+		// Format reason to highlight it better depending on the content
+		reasonDisplay := reason
+
+		// Add formatting based on reason content
+		if strings.Contains(reason, "manually started") || strings.Contains(reason, "manually by user") {
+			// Green for manual operations
+			reasonDisplay = fmt.Sprintf("<span style='color: #3c763d; font-weight: bold;'>%s</span>", reason)
+		} else if strings.Contains(reason, "system startup") || strings.Contains(reason, "boot") {
+			// Blue for boot-related events
+			reasonDisplay = fmt.Sprintf("<span style='color: #31708f; font-weight: bold;'>%s</span>", reason)
+		} else if strings.Contains(reason, "auto-restart") || strings.Contains(reason, "recovery") {
+			// Yellow for recovery events
+			reasonDisplay = fmt.Sprintf("<span style='color: #8a6d3b; font-weight: bold;'>%s</span>", reason)
+		} else if strings.Contains(reason, "manually stopped") {
+			// Orange for manual stop events
+			reasonDisplay = fmt.Sprintf("<span style='color: #f0ad4e; font-weight: bold;'>%s</span>", reason)
+		} else if strings.Contains(reason, "memory") {
+			// Red for memory-related events
+			reasonDisplay = fmt.Sprintf("<span style='color: #d9534f; font-weight: bold;'>%s</span>", reason)
+		}
+
+		tableRows = append(tableRows, alerts.TableRow{
+			Label: "Change Reason",
+			Value: reasonDisplay,
+		})
+	}
+
+	// Highlight stop reason if it's a memory-related stop
+	if status.StopReason != "" {
+		stopReasonDisplay := status.StopReason
+		if strings.Contains(status.StopReason, "Memory Critical Auto-Recovery") {
+			stopReasonDisplay = fmt.Sprintf("<span style='color: #d9534f; font-weight: bold;'>%s</span>", status.StopReason)
+		} else if strings.Contains(status.StopReason, "Out of Memory") {
+			stopReasonDisplay = fmt.Sprintf("<span style='color: #d9534f; font-weight: bold;'>%s</span>", status.StopReason)
+		}
+
+		tableRows = append(tableRows, alerts.TableRow{
+			Label: "Stop Reason",
+			Value: stopReasonDisplay,
+		})
 	}
 
 	// Create the table HTML
@@ -133,15 +178,90 @@ func (n *Notifier) createMariaDBStatusTable(status *Status, reason string) strin
 
 // createErrorDetailsContent creates HTML content for error details
 func (n *Notifier) createErrorDetailsContent(status *Status) string {
-	errorDetails := formatErrorDetails(status.StopErrorDetails)
+	var content string
 
-	return fmt.Sprintf(`
-	<div style="background-color: #f5f5f5; padding: 10px; margin-top: 20px; border-left: 5px solid #d9534f;">
-		<h3>Failure Details</h3>
-		<p><strong>Failure Type:</strong> %s</p>
-		<div style="background-color: #f8f8f8; padding: 10px; border-left: 4px solid #cc0000; 
-			font-family: monospace; white-space: pre-wrap; margin: 10px 0;">%s</div>
-	</div>`, status.StopReason, errorDetails)
+	// Special handling for manually stopped service
+	if strings.Contains(status.StopReason, "Manual Systemctl Stop") {
+		content = `
+        <div style="background-color: #fcf8e3; border-left: 5px solid #f0ad4e; padding: 10px; margin: 10px 0;">
+            <h3 style="color: #8a6d3b; margin-top: 0;">Manual Service Stop Detected</h3>
+            <p>The MariaDB service was manually stopped using the systemctl command.</p>
+            <p><strong>This is an expected event if you or another administrator initiated the stop.</strong></p>
+        </div>
+        `
+	} else if strings.Contains(status.StopReason, "Memory Critical Auto-Recovery") {
+		content = `
+        <div style="background-color: #fcf8e3; border-left: 5px solid #f0ad4e; padding: 10px; margin: 10px 0;">
+            <h3 style="color: #8a6d3b; margin-top: 0;">Automatic Memory Recovery Action</h3>
+            <p>The CheckHealthDO system detected critical memory conditions and <strong>automatically restarted</strong> the MariaDB service to free up memory resources.</p>
+            <p><strong>This is an AUTOMATIC action initiated by the memory monitor - not a manual service stop.</strong></p>
+            <p>Recommendations:</p>
+            <ul>
+                <li>Check memory usage on the server with <code>free -m</code></li>
+                <li>Review MariaDB configuration, especially memory-related settings like <code>innodb_buffer_pool_size</code></li>
+                <li>Consider adding more RAM to the server if this happens frequently</li>
+                <li>Optimize queries and database structure to reduce memory pressure</li>
+            </ul>
+        </div>
+        `
+	} else if strings.Contains(status.StopReason, "Out of Memory") {
+		content = `
+		<div style="background-color: #f2dede; border-left: 5px solid #d9534f; padding: 10px; margin: 10px 0;">
+			<h3 style="color: #a94442; margin-top: 0;">MariaDB Was Killed By The Operating System</h3>
+			<p>The system detected that MariaDB was terminated by the kernel's Out-of-Memory (OOM) killer due to severe memory pressure.</p>
+			<p><strong>This is a critical issue that requires immediate attention!</strong></p>
+			<p>Recommendations:</p>
+			<ul>
+				<li>Check memory usage on the server with <code>free -m</code></li>
+				<li>Review MariaDB configuration, especially memory-related settings</li>
+				<li>Consider adding more RAM to the server</li>
+				<li>Check for other processes consuming excessive memory</li>
+				<li>Review and optimize database queries</li>
+			</ul>
+		</div>
+		 `
+	} else if status.StopReason != "" {
+		// Generic stop reason
+		content = fmt.Sprintf(`
+        <div style="background-color: #f2dede; border-left: 5px solid #d9534f; padding: 10px; margin: 10px 0;">
+            <h3 style="color: #a94442; margin-top: 0;">MariaDB Service Stopped: %s</h3>
+            <p>The MariaDB service has stopped unexpectedly. This may require investigation.</p>
+            <p><strong>Recommended actions:</strong></p>
+            <ul>
+                <li>Check the MariaDB error logs for specific error messages</li>
+                <li>Verify system resources (disk space, memory, etc.)</li>
+                <li>Check for any recent system changes or updates</li>
+            </ul>
+        </div>
+        `, status.StopReason)
+	}
+
+	// Add a section for service start information if the service just started
+	if status.Status == "running" && status.PreviousStatus == "stopped" {
+		content += `
+        <div style="background-color: #dff0d8; border-left: 5px solid #3c763d; padding: 10px; margin: 10px 0;">
+            <h3 style="color: #3c763d; margin-top: 0;">MariaDB Service Started</h3>
+            <p>The MariaDB service has been successfully started.</p>
+            <p><strong>Steps to ensure optimal performance:</strong></p>
+            <ul>
+                <li>Check available system memory with <code>free -m</code></li>
+                <li>Monitor connections with <code>SHOW PROCESSLIST</code></li>
+                <li>Verify logs for any warnings during startup</li>
+            </ul>
+        </div>`
+	}
+
+	// Add error details section if we have any
+	if status.StopErrorDetails != "" {
+		content += fmt.Sprintf(`
+		<div style="background-color: #f5f5f5; border-left: 5px solid #777; padding: 10px; margin: 10px 0;">
+			<h3 style="margin-top: 0;">Error Details</h3>
+			<pre style="background-color: #eee; padding: 10px; border-radius: 4px; overflow-x: auto;">%s</pre>
+		</div>
+		`, formatErrorDetails(status.StopErrorDetails))
+	}
+
+	return content
 }
 
 // formatErrorDetails prepares error details for display in notifications
