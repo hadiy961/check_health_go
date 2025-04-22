@@ -52,7 +52,7 @@ monitoring:
 notifications:
   throttling:
     enabled: true
-    cooldown_period: 10  # Jangan kirim notifikasi serupa dalam 5 menit (untuk warning)
+    cooldown_period: 43200  # Jangan kirim notifikasi serupa dalam 12 jam
   
   email:
     enabled: true

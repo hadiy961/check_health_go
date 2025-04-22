@@ -2,13 +2,19 @@ package cpu
 
 import (
 	"CheckHealthDO/internal/alerts"
+	"CheckHealthDO/internal/pkg/config"
+	"CheckHealthDO/internal/pkg/logger"
 	"fmt"
+	"time"
 )
 
 // AlertHandler handles CPU alerts
 type AlertHandler struct {
-	monitor *Monitor
-	handler *alerts.Handler
+	monitor               *Monitor
+	handler               *alerts.Handler
+	lastWarningAlertTime  time.Time
+	lastCriticalAlertTime time.Time
+	lastNormalAlertTime   time.Time
 }
 
 // NewAlertHandler creates a new alert handler
@@ -23,9 +29,35 @@ func NewAlertHandler(monitor *Monitor) *AlertHandler {
 func (a *AlertHandler) HandleWarningAlert(info *CPUInfo, statusChanged bool) {
 	var counter *int = &a.handler.SuppressedWarningCount
 
-	// For warning alert, check if we should throttle
-	if a.handler.ShouldThrottleAlert(statusChanged, counter, alerts.AlertTypeWarning) {
-		return
+	// Get config with proper type assertion to determine cooldown
+	configInterface := a.monitor.GetConfig()
+	cfg, ok := configInterface.(*config.Config)
+
+	// Default cooldown of 5 minutes if can't get config
+	cooldownPeriod := 300
+	if ok && cfg.Notifications.Throttling.Enabled {
+		cooldownPeriod = cfg.Notifications.Throttling.CooldownPeriod
+	}
+
+	// Log the attempted alert regardless of whether it's throttled
+	if statusChanged {
+		logger.Info("CPU entered warning state",
+			logger.Float64("usage_percent", info.Usage),
+			logger.String("status", info.CPUStatus),
+			logger.String("timestamp", time.Now().Format(time.RFC3339)),
+			logger.Bool("notification_will_be_sent", time.Since(a.lastWarningAlertTime) >= time.Duration(cooldownPeriod)*time.Second))
+	}
+
+	// Apply throttling even for status changes
+	if !a.lastWarningAlertTime.IsZero() {
+		sinceLastWarning := time.Since(a.lastWarningAlertTime)
+		if sinceLastWarning < time.Duration(cooldownPeriod)*time.Second {
+			logger.Debug("Suppressing CPU warning notification due to cooldown",
+				logger.Int("seconds_since_last", int(sinceLastWarning.Seconds())),
+				logger.Int("cooldown_period", cooldownPeriod))
+			*counter++
+			return
+		}
 	}
 
 	// Get server information using the common utility function
@@ -54,15 +86,42 @@ func (a *AlertHandler) HandleWarningAlert(info *CPUInfo, statusChanged bool) {
 	// Send notification
 	a.handler.SendNotifications("CPU Warning", message, "warning")
 	a.monitor.UpdateLastAlertTime()
+	a.lastWarningAlertTime = time.Now()
 }
 
 // HandleCriticalAlert handles critical level CPU alerts
 func (a *AlertHandler) HandleCriticalAlert(info *CPUInfo, statusChanged bool) {
 	var counter *int = &a.handler.SuppressedCriticalCount
 
-	// For critical alert, check if we should throttle
-	if a.handler.ShouldThrottleAlert(statusChanged, counter, alerts.AlertTypeCritical) {
-		return
+	// Get config with proper type assertion to determine cooldown
+	configInterface := a.monitor.GetConfig()
+	cfg, ok := configInterface.(*config.Config)
+
+	// Default cooldown of 5 minutes if can't get config
+	cooldownPeriod := 300
+	if ok && cfg.Notifications.Throttling.Enabled {
+		cooldownPeriod = cfg.Notifications.Throttling.CooldownPeriod
+	}
+
+	// Log the attempted alert regardless of whether it's throttled
+	if statusChanged {
+		logger.Info("CPU entered critical state",
+			logger.Float64("usage_percent", info.Usage),
+			logger.String("status", info.CPUStatus),
+			logger.String("timestamp", time.Now().Format(time.RFC3339)),
+			logger.Bool("notification_will_be_sent", time.Since(a.lastCriticalAlertTime) >= time.Duration(cooldownPeriod)*time.Second))
+	}
+
+	// Apply throttling even for status changes
+	if !a.lastCriticalAlertTime.IsZero() {
+		sinceLastCritical := time.Since(a.lastCriticalAlertTime)
+		if sinceLastCritical < time.Duration(cooldownPeriod)*time.Second {
+			logger.Debug("Suppressing CPU critical notification due to cooldown",
+				logger.Int("seconds_since_last", int(sinceLastCritical.Seconds())),
+				logger.Int("cooldown_period", cooldownPeriod))
+			*counter++
+			return
+		}
 	}
 
 	// Get server information using the common utility function
@@ -94,6 +153,7 @@ func (a *AlertHandler) HandleCriticalAlert(info *CPUInfo, statusChanged bool) {
 	// Send notification
 	a.handler.SendNotifications("CRITICAL CPU Alert", message, "critical")
 	a.monitor.UpdateLastAlertTime()
+	a.lastCriticalAlertTime = time.Now()
 }
 
 // HandleNormalAlert handles notifications when CPU returns to normal state
@@ -101,6 +161,34 @@ func (a *AlertHandler) HandleNormalAlert(info *CPUInfo, statusChanged bool) {
 	// Only send notification if the status has changed
 	if !statusChanged {
 		return
+	}
+
+	// Get config with proper type assertion to determine cooldown
+	configInterface := a.monitor.GetConfig()
+	cfg, ok := configInterface.(*config.Config)
+
+	// Default cooldown of 5 minutes if can't get config
+	cooldownPeriod := 300
+	if ok && cfg.Notifications.Throttling.Enabled {
+		cooldownPeriod = cfg.Notifications.Throttling.CooldownPeriod
+	}
+
+	// Log the return to normal regardless of whether notification is throttled
+	logger.Info("CPU returned to normal state",
+		logger.Float64("usage_percent", info.Usage),
+		logger.String("status", info.CPUStatus),
+		logger.String("timestamp", time.Now().Format(time.RFC3339)),
+		logger.Bool("notification_will_be_sent", time.Since(a.lastNormalAlertTime) >= time.Duration(cooldownPeriod)*time.Second))
+
+	// Apply throttling even for normal status
+	if !a.lastNormalAlertTime.IsZero() {
+		sinceLastNormal := time.Since(a.lastNormalAlertTime)
+		if sinceLastNormal < time.Duration(cooldownPeriod)*time.Second {
+			logger.Debug("Suppressing CPU normal notification due to cooldown",
+				logger.Int("seconds_since_last", int(sinceLastNormal.Seconds())),
+				logger.Int("cooldown_period", cooldownPeriod))
+			return
+		}
 	}
 
 	// Get server information using the common utility function
@@ -132,6 +220,7 @@ func (a *AlertHandler) HandleNormalAlert(info *CPUInfo, statusChanged bool) {
 	// Send notification
 	a.handler.SendNotifications("CPU Status Normalized", message, "info")
 	a.monitor.UpdateLastAlertTime()
+	a.lastNormalAlertTime = time.Now()
 }
 
 // Helper method to create CPU-specific table content

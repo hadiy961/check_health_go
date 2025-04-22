@@ -14,16 +14,17 @@ import (
 
 // Monitor handles periodic CPU monitoring
 type Monitor struct {
-	config        *config.Config
-	ticker        *time.Ticker
-	stopChan      chan struct{}
-	isRunning     bool
-	mutex         sync.Mutex
-	lastInfo      *CPUInfo
-	lastAlertTime time.Time
-	emailManager  *notifications.EmailManager
-	checkCount    int // Counter for reducing log frequency
-	alertHandler  *AlertHandler
+	config          *config.Config
+	ticker          *time.Ticker
+	stopChan        chan struct{}
+	isRunning       bool
+	mutex           sync.Mutex
+	lastInfo        *CPUInfo
+	lastAlertTime   time.Time
+	emailManager    *notifications.EmailManager
+	checkCount      int // Counter for reducing log frequency
+	alertHandler    *AlertHandler
+	summaryReporter *SummaryReporter
 }
 
 // NewMonitor creates a new CPU monitor instance
@@ -34,6 +35,7 @@ func NewMonitor(cfg *config.Config) *Monitor {
 		emailManager: notifications.NewEmailManager(cfg),
 	}
 	m.alertHandler = NewAlertHandler(m)
+	m.summaryReporter = NewSummaryReporter(m, cfg)
 	return m
 }
 
@@ -110,20 +112,17 @@ func (m *Monitor) CheckCPU() {
 	m.mutex.Lock()
 	if m.lastInfo != nil && m.lastInfo.CPUStatus != info.CPUStatus {
 		statusChanged = true
-		logger.Info("CPU status changed",
-			logger.String("previous", m.lastInfo.CPUStatus),
-			logger.String("current", info.CPUStatus),
-			logger.Float64("usage_percent", info.Usage))
+		// Log the status change using the dedicated status logger
+		GetStatusLogger().LogStatusChange(m.lastInfo.CPUStatus, info.CPUStatus, info.Usage)
 	}
 
 	// Store the latest metrics
 	m.lastInfo = info
 	m.mutex.Unlock()
 
-	// Only log detailed information if status changed or at a lower frequency
-	// Use static counter to reduce log frequency
+	// Only log detailed information if not a status change but at a lower frequency
 	m.checkCount++
-	if statusChanged { // Log once every ~60 checks
+	if !statusChanged && m.checkCount%60 == 0 { // Log once every ~60 checks
 		logger.Info("CPU status",
 			logger.Float64("usage_percent", info.Usage),
 			logger.String("status", info.CPUStatus),
@@ -181,6 +180,9 @@ func (m *Monitor) CheckCPU() {
 	if handler := registry.GetCPUHandler(); handler != nil {
 		registry.BroadcastCPU(combinedMsg)
 	}
+
+	// Record the event for summary reporting
+	m.summaryReporter.RecordEvent(info)
 
 	// Process alerts based on status
 	switch info.CPUStatus {
