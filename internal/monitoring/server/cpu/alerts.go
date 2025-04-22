@@ -23,25 +23,48 @@ type AlertHandler struct {
 	pendingWarnings       []CPUInfo     // For collecting multiple warnings
 	aggregationInterval   time.Duration // How long to collect alerts before sending
 	lastAggregationTime   time.Time     // When we last sent an aggregated alert
+	// Add new anti-spam fields similar to memory monitor
+	warningThrottleWindow time.Duration // Only send one warning per this window
+	criticalThrottleCount int           // Send critical alerts only after this many consecutive critical events
+	currentCriticalCount  int           // Counter for current consecutive critical events
+	maxWarningsPerDay     int           // Maximum number of warning emails per day
+	warningsSentToday     int           // Counter for warnings sent today
+	lastDayReset          time.Time     // When we last reset the daily counter
+	lastInfo              *CPUInfo      // Last CPU info for comparison
 }
 
 // NewAlertHandler creates a new alert handler
 func NewAlertHandler(monitor *Monitor) *AlertHandler {
 	return &AlertHandler{
 		monitor:              monitor,
-		handler:              alerts.NewHandler(monitor, nil), // Use default styles
-		lastWarningAlertTime: time.Time{},                     // Initialize to zero time
+		handler:              alerts.NewHandler(monitor, nil),
+		lastWarningAlertTime: time.Time{},
 		warningCount:         0,
 		warningEscalation:    5, // Only notify after 5 consecutive warnings
 		pendingWarnings:      make([]CPUInfo, 0),
 		aggregationInterval:  5 * time.Minute,
 		lastAggregationTime:  time.Now(),
+		// Add anti-spam settings - similar to memory but slightly adjusted
+		warningThrottleWindow: 30 * time.Minute, // Only send one warning alert per 30 minutes
+		criticalThrottleCount: 3,                // Require 3 consecutive critical events before sending alert
+		currentCriticalCount:  0,
+		maxWarningsPerDay:     5, // Limit daily warnings
+		warningsSentToday:     0,
+		lastDayReset:          time.Now(),
+		lastInfo:              nil,
 	}
 }
 
 // HandleWarningAlert handles warning level CPU alerts
 func (a *AlertHandler) HandleWarningAlert(info *CPUInfo, statusChanged bool) {
 	var counter *int = &a.handler.SuppressedWarningCount
+
+	// Check if we need to reset the daily counter
+	now := time.Now()
+	if now.YearDay() != a.lastDayReset.YearDay() || now.Year() != a.lastDayReset.Year() {
+		a.warningsSentToday = 0
+		a.lastDayReset = now
+	}
 
 	// Get config with proper type assertion to determine cooldown
 	configInterface := a.monitor.GetConfig()
@@ -62,22 +85,40 @@ func (a *AlertHandler) HandleWarningAlert(info *CPUInfo, statusChanged bool) {
 			logger.Bool("notification_will_be_sent", time.Since(a.lastWarningAlertTime) >= time.Duration(cooldownPeriod)*time.Second))
 	}
 
-	// Apply additional time-based throttling to warnings specifically
-	if !statusChanged && !a.lastWarningAlertTime.IsZero() {
-		sinceLastWarning := time.Since(a.lastWarningAlertTime)
-		if sinceLastWarning < time.Duration(cooldownPeriod)*time.Second {
-			logger.Debug("Suppressing CPU warning notification due to cooldown",
-				logger.Int("seconds_since_last", int(sinceLastWarning.Seconds())),
-				logger.Int("cooldown_period", cooldownPeriod))
-			*counter++
-			return
-		}
+	// Reset critical counter when we get a warning
+	a.currentCriticalCount = 0
+
+	// If status changed from critical to warning, handle it differently
+	if statusChanged && a.lastInfo != nil && a.lastInfo.CPUStatus == "critical" {
+		// This is an improvement, just log it but don't send notification to reduce spam
+		logger.Info("CPU improved from critical to warning state",
+			logger.Float64("usage_percent", info.Usage))
+		a.lastInfo = info
+		return
 	}
 
-	// If status changed, send immediately
+	// Throttle based on our custom window - only one warning alert per warningThrottleWindow
+	if !a.lastWarningAlertTime.IsZero() && time.Since(a.lastWarningAlertTime) < a.warningThrottleWindow {
+		logger.Debug("Suppressing CPU warning notification due to throttle window",
+			logger.Int("minutes_since_last", int(time.Since(a.lastWarningAlertTime).Minutes())),
+			logger.Int("throttle_window_minutes", int(a.warningThrottleWindow.Minutes())))
+		*counter++
+		return
+	}
+
+	// Enforce daily maximum
+	if a.warningsSentToday >= a.maxWarningsPerDay {
+		logger.Info("Daily CPU warning notification limit reached",
+			logger.Int("max_warnings_per_day", a.maxWarningsPerDay),
+			logger.Int("warnings_sent_today", a.warningsSentToday))
+		return
+	}
+
+	// If status changed, send immediately (unless already handled above)
 	if statusChanged {
 		// Reset counter on status change
 		a.warningCount = 0
+		a.lastInfo = info
 
 		// Send normal notification for status changes
 		a.sendWarningNotification(info, statusChanged, "")
@@ -86,6 +127,7 @@ func (a *AlertHandler) HandleWarningAlert(info *CPUInfo, statusChanged bool) {
 
 	// For non-status change warnings, use escalation
 	a.warningCount++
+	a.lastInfo = info
 
 	// Collect for aggregation
 	a.pendingWarnings = append(a.pendingWarnings, *info)
@@ -116,6 +158,9 @@ func (a *AlertHandler) HandleWarningAlert(info *CPUInfo, statusChanged bool) {
 
 // sendWarningNotification sends a warning notification for CPU issues
 func (a *AlertHandler) sendWarningNotification(info *CPUInfo, statusChanged bool, additionalNote string) {
+	// Increase the warning sent counter
+	a.warningsSentToday++
+
 	// For warning alert, check if we should throttle using the handler's method
 	var counter *int = &a.handler.SuppressedWarningCount
 	if a.handler.ShouldThrottleAlert(statusChanged, counter, alerts.AlertTypeWarning) {
@@ -138,6 +183,11 @@ func (a *AlertHandler) sendWarningNotification(info *CPUInfo, statusChanged bool
 	if additionalNote != "" {
 		additionalContent += additionalNote
 	}
+
+	// Add daily warning count information
+	additionalContent += fmt.Sprintf(`
+	<p><small>This is warning notification %d of %d allowed per day.</small></p>`,
+		a.warningsSentToday, a.maxWarningsPerDay)
 
 	// Get trend information directly from the monitor
 	trend, percentChange := a.monitor.getCPUTrend()
@@ -185,10 +235,21 @@ func (a *AlertHandler) sendWarningNotification(info *CPUInfo, statusChanged bool
 	// Send notification
 	a.handler.SendNotifications("CPU Warning", message, "warning")
 	a.monitor.UpdateLastAlertTime()
+
+	// Reset warning count after sending
+	a.warningCount = 0
+
+	logger.Info("Sent CPU warning notification",
+		logger.Float64("usage_percent", info.Usage),
+		logger.Int("warnings_sent_today", a.warningsSentToday),
+		logger.Int("max_per_day", a.maxWarningsPerDay))
 }
 
 // HandleCriticalAlert handles critical level CPU alerts
 func (a *AlertHandler) HandleCriticalAlert(info *CPUInfo, statusChanged bool) {
+	// Increment critical event counter
+	a.currentCriticalCount++
+
 	var counter *int = &a.handler.SuppressedCriticalCount
 
 	// Get config with proper type assertion to determine cooldown
@@ -207,7 +268,21 @@ func (a *AlertHandler) HandleCriticalAlert(info *CPUInfo, statusChanged bool) {
 			logger.Float64("usage_percent", info.Usage),
 			logger.String("status", info.CPUStatus),
 			logger.String("timestamp", time.Now().Format(time.RFC3339)),
+			logger.Int("consecutive_critical_events", a.currentCriticalCount),
+			logger.Int("threshold_for_alert", a.criticalThrottleCount),
 			logger.Bool("notification_will_be_sent", time.Since(a.lastCriticalAlertTime) >= time.Duration(cooldownPeriod)*time.Second))
+	}
+
+	// Store current info for comparison in next cycle
+	a.lastInfo = info
+
+	// For critical events, require consecutive occurrences before alerting
+	// Unless this is a status change from normal directly to critical
+	if !statusChanged && a.currentCriticalCount < a.criticalThrottleCount {
+		logger.Info("Suppressing CPU critical alert until threshold reached",
+			logger.Int("current_count", a.currentCriticalCount),
+			logger.Int("threshold", a.criticalThrottleCount))
+		return
 	}
 
 	// Apply throttling even for status changes
@@ -293,15 +368,26 @@ func (a *AlertHandler) HandleCriticalAlert(info *CPUInfo, statusChanged bool) {
 	a.handler.SendNotifications("CRITICAL CPU Alert", message, "critical")
 	a.monitor.UpdateLastAlertTime()
 	a.lastCriticalAlertTime = time.Now()
+
+	// Reset the counter after alert is sent
+	a.currentCriticalCount = 0
+
+	logger.Info("Sent critical CPU alert",
+		logger.Float64("usage_percent", info.Usage))
 }
 
 // HandleNormalAlert handles notifications when CPU returns to normal state
 func (a *AlertHandler) HandleNormalAlert(info *CPUInfo, statusChanged bool) {
-	// Reset escalation counter when returning to normal
+	// Reset counters when returning to normal
 	a.warningCount = 0
+	a.currentCriticalCount = 0
 
-	// Only send notification if the status has changed
-	if !statusChanged {
+	// Store current info for comparison in next cycle
+	a.lastInfo = info
+
+	// Only send notification if the status has changed from critical to normal
+	// Don't send notifications for warning->normal transitions to reduce spam
+	if !statusChanged || (a.lastInfo != nil && a.lastInfo.CPUStatus != "critical") {
 		return
 	}
 
@@ -369,6 +455,9 @@ func (a *AlertHandler) HandleNormalAlert(info *CPUInfo, statusChanged bool) {
 	a.handler.SendNotifications("CPU Status Normalized", message, "info")
 	a.monitor.UpdateLastAlertTime()
 	a.lastNormalAlertTime = time.Now()
+
+	logger.Info("Sent CPU normalized notification",
+		logger.Float64("usage_percent", info.Usage))
 }
 
 // Helper method to create CPU-specific table content
@@ -459,6 +548,9 @@ func (a *AlertHandler) sendAggregatedWarningAlert() {
 		return
 	}
 
+	// Increase the warning sent counter
+	a.warningsSentToday++
+
 	// Find highest CPU usage from collected warnings
 	highestUsage := float64(0)
 	var worstCPUInfo *CPUInfo
@@ -474,6 +566,7 @@ func (a *AlertHandler) sendAggregatedWarningAlert() {
     <p><b>Aggregated Warning:</b> %d CPU warnings detected in the last %d minutes.</p>
     <p>Highest CPU usage was %.2f%%</p>
     <p><b>Recommendation:</b> Please monitor the system closely if this condition persists.</p>
+	<p><small>This is warning notification %d of %d allowed per day.</small></p>
     
     <div style="background-color: #fcf8e3; border-left: 5px solid #faebcc; padding: 10px; margin: 10px 0;">
         <p><b>TREND SUMMARY:</b> Persistent CPU warnings may indicate:</p>
@@ -484,7 +577,11 @@ func (a *AlertHandler) sendAggregatedWarningAlert() {
             <li>Potential need for workload distribution or scaling</li>
         </ul>
     </div>`,
-		len(a.pendingWarnings), int(a.aggregationInterval.Minutes()), highestUsage)
+		len(a.pendingWarnings),
+		int(a.aggregationInterval.Minutes()),
+		highestUsage,
+		a.warningsSentToday,
+		a.maxWarningsPerDay)
 
 	// Get server information using the common utility function
 	serverInfo := alerts.GetServerInfoForAlert()
@@ -513,6 +610,18 @@ func (a *AlertHandler) sendAggregatedWarningAlert() {
 	// Update tracking state
 	a.lastAggregationTime = time.Now()
 	a.pendingWarnings = make([]CPUInfo, 0) // Clear pending warnings
+
+	// Record the time we're sending this warning
+	a.lastWarningAlertTime = time.Now()
+
+	// Reset warning count after sending aggregated alert
+	a.warningCount = 0
+
+	logger.Info("Sent aggregated CPU warning notification",
+		logger.Int("warning_count", len(a.pendingWarnings)),
+		logger.Float64("highest_usage", highestUsage),
+		logger.Int("warnings_sent_today", a.warningsSentToday),
+		logger.Int("max_per_day", a.maxWarningsPerDay))
 }
 
 // Helper function to get system load average

@@ -3,11 +3,14 @@ package cpu
 import (
 	"fmt"
 	"runtime"
+	"strconv"
+	"strings"
 	"time"
 
 	gopsutilCPU "github.com/shirou/gopsutil/cpu"
 	"github.com/shirou/gopsutil/host"
 )
+
 
 // GetCPUInfo retrieves the current CPU information
 func GetCPUInfo(warningThreshold, criticalThreshold float64) (*CPUInfo, error) {
@@ -210,4 +213,88 @@ func GetCPUCoreInfo() (*CPUInfo, error) {
 		Architecture:   runtime.GOARCH,
 		ProcessorCount: processorCount,
 	}, nil
+}
+
+// Helper function to detect if running in a virtualized environment
+func detectVirtualization() (bool, string) {
+	info, err := host.Info()
+	if err != nil {
+		return false, ""
+	}
+
+	// Check if virtualization system is detected
+	if info.VirtualizationSystem != "" && info.VirtualizationSystem != "none" {
+		return true, info.VirtualizationSystem
+	}
+
+	return false, ""
+}
+
+// Helper function to count physical processors
+func getProcessorCount(cpuInfo []gopsutilCPU.InfoStat) int {
+	// Create a map to track unique physical IDs
+	physicalIDs := make(map[string]bool)
+
+	for _, cpu := range cpuInfo {
+		physicalIDs[cpu.PhysicalID] = true
+	}
+
+	// If physical ID information is available, return the count
+	if len(physicalIDs) > 0 {
+		return len(physicalIDs)
+	}
+
+	// Default to returning the number of CPU entries
+	return len(cpuInfo)
+}
+
+// Helper function to get CPU temperature from thermal sensors
+func getCPUTemperature() float64 {
+	// This is a simplified implementation - in real systems, you might
+	// need to use platform-specific approaches or additional libraries
+	// like lm-sensors to get accurate temperature data.
+
+	// For now, just returning 0 as a placeholder
+	return 0
+}
+
+// FormatBytes formats bytes into a human-readable string
+func FormatBytes(bytes uint64) string {
+	const (
+		B  = 1
+		KB = B * 1024
+		MB = KB * 1024
+		GB = MB * 1024
+		TB = GB * 1024
+		PB = TB * 1024
+	)
+
+	unit := ""
+	value := float64(bytes)
+
+	switch {
+	case bytes >= PB:
+		unit = "PB"
+		value = value / PB
+	case bytes >= TB:
+		unit = "TB"
+		value = value / TB
+	case bytes >= GB:
+		unit = "GB"
+		value = value / GB
+	case bytes >= MB:
+		unit = "MB"
+		value = value / MB
+	case bytes >= KB:
+		unit = "KB"
+		value = value / KB
+	case bytes >= B:
+		unit = "B"
+	case bytes == 0:
+		return "0B"
+	}
+
+	result := strconv.FormatFloat(value, 'f', 2, 64)
+	result = strings.TrimSuffix(result, ".00")
+	return result + unit
 }

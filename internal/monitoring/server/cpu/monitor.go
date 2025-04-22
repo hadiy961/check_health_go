@@ -203,14 +203,22 @@ func (m *Monitor) CheckCPU() {
 	// Record the event for summary reporting
 	m.summaryReporter.RecordEvent(info)
 
-	// Process alerts based on status
-	switch info.CPUStatus {
-	case "normal":
-		m.alertHandler.HandleNormalAlert(info, statusChanged)
-	case "warning":
-		m.alertHandler.HandleWarningAlert(info, statusChanged)
-	case "critical":
-		m.alertHandler.HandleCriticalAlert(info, statusChanged)
+	// Only process alerts if status changed or a significant amount of time has passed
+	// since the last alert to avoid excessive checks
+	shouldProcessAlerts := statusChanged ||
+		(time.Since(m.lastAlertTime) >= 5*time.Minute) ||
+		(info.CPUStatus == "critical" && time.Since(m.lastAlertTime) >= 1*time.Minute)
+
+	if shouldProcessAlerts {
+		// Process alerts based on status
+		switch info.CPUStatus {
+		case "normal":
+			m.alertHandler.HandleNormalAlert(info, statusChanged)
+		case "warning":
+			m.alertHandler.HandleWarningAlert(info, statusChanged)
+		case "critical":
+			m.alertHandler.HandleCriticalAlert(info, statusChanged)
+		}
 	}
 }
 
