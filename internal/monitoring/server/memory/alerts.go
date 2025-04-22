@@ -36,19 +36,43 @@ type AlertHandler struct {
 
 // NewAlertHandler creates a new alert handler
 func NewAlertHandler(monitor *Monitor) *AlertHandler {
+	// Get config to read throttling settings
+	cfg := monitor.GetConfigPtr()
+
+	// Set defaults
+	criticalThrottleCount := 3
+	warningEscalation := 10
+	maxWarningsPerDay := 5
+	aggregationInterval := 15 * time.Minute
+	warningThrottleWindow := 30 * time.Minute
+
+	// Use config values if available
+	if cfg != nil && cfg.Notifications.Throttling.Enabled {
+		if cfg.Notifications.Throttling.CriticalThreshold > 0 {
+			criticalThrottleCount = cfg.Notifications.Throttling.CriticalThreshold
+		}
+		if cfg.Notifications.Throttling.MaxWarningsPerDay > 0 {
+			maxWarningsPerDay = cfg.Notifications.Throttling.MaxWarningsPerDay
+		}
+		if cfg.Notifications.Throttling.AggregationPeriod > 0 {
+			aggregationInterval = time.Duration(cfg.Notifications.Throttling.AggregationPeriod) * time.Minute
+		}
+	}
+
 	return &AlertHandler{
-		monitor:               monitor,
-		handler:               alerts.NewHandler(monitor, nil), // Use default styles
-		lastWarningAlertTime:  time.Time{},                     // Initialize to zero time
-		warningCount:          0,
-		warningEscalation:     10, // Increase threshold - only notify after 10 consecutive warnings
-		pendingWarnings:       make([]MemoryInfo, 0),
-		aggregationInterval:   15 * time.Minute, // Increase aggregation interval to 15 minutes
-		lastAggregationTime:   time.Now(),
-		warningThrottleWindow: 30 * time.Minute, // Only send one warning alert per 30 minutes
-		criticalThrottleCount: 3,                // Require 3 consecutive critical events before sending alert
+		monitor:              monitor,
+		handler:              alerts.NewHandler(monitor, nil),
+		lastWarningAlertTime: time.Time{},
+		warningCount:         0,
+		warningEscalation:    warningEscalation, // Only notify after consecutive warnings
+		pendingWarnings:      make([]MemoryInfo, 0),
+		aggregationInterval:  aggregationInterval, // Use from config
+		lastAggregationTime:  time.Now(),
+		// Anti-spam settings
+		warningThrottleWindow: warningThrottleWindow,
+		criticalThrottleCount: criticalThrottleCount, // Use from config
 		currentCriticalCount:  0,
-		maxWarningsPerDay:     5, // Maximum 5 warning emails per day
+		maxWarningsPerDay:     maxWarningsPerDay, // Use from config
 		warningsSentToday:     0,
 		lastDayReset:          time.Now(),
 		lastInfo:              nil,

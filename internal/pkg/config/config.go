@@ -104,8 +104,11 @@ type NotificationsConfig struct {
 
 // ThrottlingConfig holds throttling configuration for notifications
 type ThrottlingConfig struct {
-	Enabled        bool `yaml:"enabled"`
-	CooldownPeriod int  `yaml:"cooldown_period"`
+	Enabled           bool `yaml:"enabled"`
+	CooldownPeriod    int  `yaml:"cooldown_period"`
+	MaxWarningsPerDay int  `yaml:"max_warnings_per_day"`
+	AggregationPeriod int  `yaml:"aggregation_period"`
+	CriticalThreshold int  `yaml:"critical_threshold"`
 }
 
 // EmailConfig holds email notification configuration
