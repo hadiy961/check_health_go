@@ -25,22 +25,16 @@ type Monitor struct {
 	checkCount      int // Counter for reducing log frequency
 	alertHandler    *AlertHandler
 	summaryReporter *SummaryReporter // Add this field
-	usageReadings   []float64        // Store recent memory readings
-	maxReadings     int              // Maximum number of readings to store
-	readingInterval time.Duration    // Time between readings
-	lastReadingTime time.Time        // When the last reading was taken
+	// Remove trend-related fields
 }
 
 // NewMonitor creates a new memory monitor instance
 func NewMonitor(cfg *config.Config) *Monitor {
 	m := &Monitor{
-		config:          cfg,
-		stopChan:        make(chan struct{}),
-		emailManager:    notifications.NewEmailManager(cfg),
-		usageReadings:   make([]float64, 0, 10), // Store last 10 readings
-		maxReadings:     10,
-		readingInterval: time.Minute, // Take readings every minute for trend analysis
-		lastReadingTime: time.Time{},
+		config:       cfg,
+		stopChan:     make(chan struct{}),
+		emailManager: notifications.NewEmailManager(cfg),
+		// Remove trend-related initialization
 	}
 	m.alertHandler = NewAlertHandler(m)
 	m.summaryReporter = NewSummaryReporter(m, cfg) // Initialize the summary reporter
@@ -177,16 +171,7 @@ func (m *Monitor) checkMemory() {
 	// Record the event for summary reporting
 	m.summaryReporter.RecordEvent(info)
 
-	// Record usage for trend analysis if enough time has passed
-	if time.Since(m.lastReadingTime) >= m.readingInterval {
-		m.mutex.Lock()
-		m.usageReadings = append(m.usageReadings, info.UsedMemoryPercentage)
-		if len(m.usageReadings) > m.maxReadings {
-			m.usageReadings = m.usageReadings[1:] // Remove oldest reading
-		}
-		m.lastReadingTime = time.Now()
-		m.mutex.Unlock()
-	}
+	// Remove trend analysis code
 
 	// Process alerts based on status
 	switch info.MemoryStatus {
@@ -246,41 +231,4 @@ func StartBackgroundMonitor(ctx context.Context, cfg *config.Config) (func(), er
 	return func() {
 		monitor.StopMonitoring()
 	}, nil
-}
-
-// Add this function to compute memory usage trend
-func (m *Monitor) getMemoryTrend() (trend string, increasePct float64) {
-	if len(m.usageReadings) < 2 {
-		return "stable", 0.0
-	}
-
-	// Calculate the average of the first half vs the second half of readings
-	midpoint := len(m.usageReadings) / 2
-	var firstHalfSum, secondHalfSum float64
-
-	for i := 0; i < midpoint; i++ {
-		firstHalfSum += m.usageReadings[i]
-	}
-
-	for i := midpoint; i < len(m.usageReadings); i++ {
-		secondHalfSum += m.usageReadings[i]
-	}
-
-	firstHalfAvg := firstHalfSum / float64(midpoint)
-	secondHalfAvg := secondHalfSum / float64(len(m.usageReadings)-midpoint)
-
-	percentChange := ((secondHalfAvg - firstHalfAvg) / firstHalfAvg) * 100.0
-
-	switch {
-	case percentChange > 5.0:
-		return "rapidly increasing", percentChange
-	case percentChange > 1.0:
-		return "increasing", percentChange
-	case percentChange < -5.0:
-		return "rapidly decreasing", percentChange
-	case percentChange < -1.0:
-		return "decreasing", percentChange
-	default:
-		return "stable", percentChange
-	}
 }

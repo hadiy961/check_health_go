@@ -11,7 +11,6 @@ import (
 	"github.com/shirou/gopsutil/host"
 )
 
-
 // GetCPUInfo retrieves the current CPU information
 func GetCPUInfo(warningThreshold, criticalThreshold float64) (*CPUInfo, error) {
 	// Get CPU stats
@@ -106,9 +105,10 @@ func GetCPUInfo(warningThreshold, criticalThreshold float64) (*CPUInfo, error) {
 		status = "warning"
 	}
 
-	// Convert CPU times to a map
+	// Convert CPU times to a map - ensure these are properly normalized
 	cpuTimeMap := make(map[string]float64)
 	if len(cpuTimes) > 0 {
+		// Store raw time values, we'll calculate percentages when displaying
 		cpuTimeMap["user"] = cpuTimes[0].User
 		cpuTimeMap["system"] = cpuTimes[0].System
 		cpuTimeMap["idle"] = cpuTimes[0].Idle

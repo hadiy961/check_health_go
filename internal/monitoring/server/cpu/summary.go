@@ -105,13 +105,6 @@ func (s *SummaryReporter) sendSummaryReport() {
 		{Label: "Time in Critical State", Value: fmt.Sprintf("%.1f%% (%.1f hours)", criticalPct, float64(s.highUsageDurations["critical"].Hours()))},
 	}
 
-	// Add trend information if available
-	trend, percentChange := s.monitor.getCPUTrend()
-	tableRows = append(tableRows, alerts.TableRow{
-		Label: "CPU Usage Trend",
-		Value: fmt.Sprintf("%s (%.1f%% change)", trend, percentChange),
-	})
-
 	// Add current CPU status
 	if currentInfo := s.monitor.GetLastCPUInfo(); currentInfo != nil {
 		tableRows = append(tableRows, alerts.TableRow{

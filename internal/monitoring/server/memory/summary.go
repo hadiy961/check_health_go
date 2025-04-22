@@ -76,13 +76,6 @@ func (s *SummaryReporter) sendSummaryReport() {
 		{Label: "Peak Memory Usage", Value: fmt.Sprintf("%.2f%%", s.peakMemoryUsage)},
 	}
 
-	// Add trend information if available
-	trend, percentChange := s.monitor.getMemoryTrend()
-	tableRows = append(tableRows, alerts.TableRow{
-		Label: "Memory Usage Trend",
-		Value: fmt.Sprintf("%s (%.1f%% change)", trend, percentChange),
-	})
-
 	// Add current memory status
 	if currentInfo := s.monitor.GetLastMemoryInfo(); currentInfo != nil {
 		tableRows = append(tableRows, alerts.TableRow{

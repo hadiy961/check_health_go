@@ -6,7 +6,6 @@ import (
 	"CheckHealthDO/internal/pkg/logger"
 	"CheckHealthDO/internal/services/mariadb"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/shirou/gopsutil/load"
@@ -188,19 +187,6 @@ func (a *AlertHandler) sendWarningNotification(info *MemoryInfo, statusChanged b
 	additionalContent += fmt.Sprintf(`
 	<p><small>This is warning notification %d of %d allowed per day.</small></p>`,
 		a.warningsSentToday, a.maxWarningsPerDay)
-
-	// Get trend information directly from the monitor
-	trend, percentChange := a.monitor.getMemoryTrend()
-
-	// Customize additional content based on trend
-	if strings.Contains(trend, "increasing") {
-		trendHTML := fmt.Sprintf(`
-		<div style="background-color: #fcf8e3; border-left: 5px solid #faebcc; padding: 10px; margin: 10px 0;">
-			<p><b>TREND ALERT:</b> Memory usage is %s (%.1f%% change over monitoring period).</p>
-			<p>This suggests a potential memory leak or growing resource usage that may require investigation.</p>
-		</div>`, trend, percentChange)
-		additionalContent += trendHTML
-	}
 
 	// Get style for this alert type
 	style := a.handler.GetAlertStyle(alerts.AlertTypeWarning)
@@ -474,13 +460,6 @@ func (a *AlertHandler) createMemoryTableContent(info *MemoryInfo) string {
 		{Label: "Total Memory", Value: fmt.Sprintf("%.2f GB", totalMemoryGB)},
 		{Label: "Free Memory", Value: fmt.Sprintf("%.2f GB (%.2f%%)", freeMemoryGB, info.FreeMemoryPercentage)},
 	}
-
-	// Add trend information directly from the monitor
-	trend, percentChange := a.monitor.getMemoryTrend()
-	tableRows = append(tableRows, alerts.TableRow{
-		Label: "Memory Trend",
-		Value: fmt.Sprintf("%s (%.1f%% change)", trend, percentChange),
-	})
 
 	// Add any available memory info if present
 	availableMemory := GetAvailableMemory()

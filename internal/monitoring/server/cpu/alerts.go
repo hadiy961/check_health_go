@@ -5,7 +5,6 @@ import (
 	"CheckHealthDO/internal/pkg/config"
 	"CheckHealthDO/internal/pkg/logger"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/shirou/gopsutil/load"
@@ -211,26 +210,6 @@ func (a *AlertHandler) sendWarningNotification(info *CPUInfo, statusChanged bool
 	additionalContent += fmt.Sprintf(`
 	<p><small>This is warning notification %d of %d allowed per day.</small></p>`,
 		a.warningsSentToday, a.maxWarningsPerDay)
-
-	// Get trend information directly from the monitor
-	trend, percentChange := a.monitor.getCPUTrend()
-
-	// Customize additional content based on trend
-	if strings.Contains(trend, "increasing") {
-		trendHTML := fmt.Sprintf(`
-		<div style="background-color: #fcf8e3; border-left: 5px solid #faebcc; padding: 10px; margin: 10px 0;">
-			<p><b>TREND ALERT:</b> CPU usage is %s (%.1f%% change over monitoring period).</p>
-			<p>This suggests increasing system load that may require investigation.</p>
-			<p><b>Possible causes:</b></p>
-			<ul>
-				<li>Running resource-intensive applications</li>
-				<li>Background processes consuming CPU</li>
-				<li>Scheduled tasks like backups or indexing</li>
-				<li>Runaway processes or potential malware</li>
-			</ul>
-		</div>`, trend, percentChange)
-		additionalContent += trendHTML
-	}
 
 	// Add system load information if available
 	if loadAvg, err := getSystemLoadAvg(); err == nil && len(loadAvg) >= 3 {
@@ -531,11 +510,12 @@ func (a *AlertHandler) createCPUTableContent(info *CPUInfo) string {
 		})
 	}
 
-	// Add CPU time distribution
+	// Add CPU time distribution with proper normalization
 	userPct := 0.0
 	sysPct := 0.0
 	idlePct := 0.0
 
+	// Get CPU times and calculate percentages properly
 	if times, ok := info.CPUTimes["user"]; ok {
 		userPct = times
 	}
@@ -546,16 +526,17 @@ func (a *AlertHandler) createCPUTableContent(info *CPUInfo) string {
 		idlePct = times
 	}
 
+	// Convert the raw CPU time values to actual percentages
+	total := userPct + sysPct + idlePct
+	if total > 0 {
+		userPct = (userPct / total) * 100
+		sysPct = (sysPct / total) * 100
+		idlePct = (idlePct / total) * 100
+	}
+
 	tableRows = append(tableRows, alerts.TableRow{
 		Label: "Usage Distribution",
 		Value: fmt.Sprintf("User: %.1f%%, System: %.1f%%, Idle: %.1f%%", userPct, sysPct, idlePct),
-	})
-
-	// Add trend information directly from the monitor
-	trend, percentChange := a.monitor.getCPUTrend()
-	tableRows = append(tableRows, alerts.TableRow{
-		Label: "CPU Trend",
-		Value: fmt.Sprintf("%s (%.1f%% change)", trend, percentChange),
 	})
 
 	// Create the table HTML
