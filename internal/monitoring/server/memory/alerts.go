@@ -54,11 +54,17 @@ func NewAlertHandler(monitor *Monitor) *AlertHandler {
 		if cfg.Notifications.Throttling.CriticalThreshold > 0 {
 			criticalThrottleCount = cfg.Notifications.Throttling.CriticalThreshold
 		}
+		if cfg.Notifications.Throttling.WarningWindow > 0 {
+			warningEscalation = cfg.Notifications.Throttling.WarningWindow
+		}
 		if cfg.Notifications.Throttling.MaxWarningsPerDay > 0 {
 			maxWarningsPerDay = cfg.Notifications.Throttling.MaxWarningsPerDay
 		}
 		if cfg.Notifications.Throttling.AggregationPeriod > 0 {
 			aggregationInterval = time.Duration(cfg.Notifications.Throttling.AggregationPeriod) * time.Minute
+		}
+		if cfg.Notifications.Throttling.WarningWindow > 0 {
+			warningThrottleWindow = time.Duration(cfg.Notifications.Throttling.WarningWindow) * time.Minute
 		}
 	}
 
@@ -115,9 +121,9 @@ func (a *AlertHandler) HandleWarningAlert(info *MemoryInfo, statusChanged bool) 
 
 	// Throttle based on our custom window - only one warning alert per warningThrottleWindow
 	if !a.lastWarningAlertTime.IsZero() && time.Since(a.lastWarningAlertTime) < a.warningThrottleWindow {
-		logger.Debug("Suppressing memory warning notification due to throttle window",
-			logger.Int("minutes_since_last", int(time.Since(a.lastWarningAlertTime).Minutes())),
-			logger.Int("throttle_window_minutes", int(a.warningThrottleWindow.Minutes())))
+		// logger.Debug("Suppressing memory warning notification due to throttle window",
+		// 	logger.Int("minutes_since_last", int(time.Since(a.lastWarningAlertTime).Minutes())),
+		// 	logger.Int("throttle_window_minutes", int(a.warningThrottleWindow.Minutes())))
 		*counter++
 		return
 	}
