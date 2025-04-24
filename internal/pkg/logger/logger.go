@@ -143,7 +143,12 @@ func getLogLevel(levelStr string) (zapcore.Level, error) {
 
 // Debug logs a message at DebugLevel with structured fields
 func Debug(msg string, fields ...zap.Field) {
-	Log.Debug(msg, fields...)
+	if Log != nil {
+		Log.Debug(msg, fields...)
+	} else {
+		// If the logger is not initialized yet, print to stdout as fallback
+		fmt.Printf("DEBUG: %s, fields: %v\n", msg, fields)
+	}
 }
 
 // Info logs a message at InfoLevel with structured fields

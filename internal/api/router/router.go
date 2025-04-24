@@ -103,13 +103,6 @@ func (r *Router) Initialize() *Router {
 	// Add a simple root endpoint for API health check
 	r.registerRootAPIEndpoint()
 
-	// Log all registered routes for debugging
-	for _, route := range r.engine.Routes() {
-		logger.Debug("Registered route",
-			logger.String("method", route.Method),
-			logger.String("path", route.Path))
-	}
-
 	return r
 }
 

@@ -109,21 +109,24 @@ type ThrottlingConfig struct {
 	MaxWarningsPerDay int  `yaml:"max_warnings_per_day"`
 	AggregationPeriod int  `yaml:"aggregation_period"`
 	CriticalThreshold int  `yaml:"critical_threshold"`
+	WarningWindow     int  `yaml:"warning_window"` // New field for warning throttle window in minutes
 }
 
-// EmailConfig holds email notification configuration
+// EmailConfig contains email notification settings
 type EmailConfig struct {
 	Enabled         bool          `yaml:"enabled"`
+	Provider        string        `yaml:"provider"` // New field for selecting email provider (smtp, mutt)
 	SMTPServer      string        `yaml:"smtp_server"`
 	SMTPPort        int           `yaml:"smtp_port"`
 	UseTLS          bool          `yaml:"use_tls"`
 	UseSSL          bool          `yaml:"use_ssl"`
-	Timeout         int           `yaml:"timeout"`
+	UseLoginAuth    bool          `yaml:"use_login_auth"` // Add this field for Office 365/Outlook auth
+	Timeout         int           `yaml:"timeout"`        // In seconds
+	MuttPath        string        `yaml:"mutt_path"`      // Path to mutt executable
 	SenderEmails    []SenderEmail `yaml:"sender_emails"`
 	RecipientEmails []string      `yaml:"recipient_emails"`
 	RetryCount      int           `yaml:"retry_count"`
-	RetryInterval   int           `yaml:"retry_interval"`
-	TemplateDir     string        `yaml:"template_dir"`
+	RetryInterval   int           `yaml:"retry_interval"` // In seconds
 }
 
 // SenderEmail represents an email sender with credentials
@@ -225,16 +228,21 @@ func GetDefaultConfig() *Config {
 		},
 		Notifications: NotificationsConfig{
 			Throttling: ThrottlingConfig{
-				Enabled:        true,
-				CooldownPeriod: 300,
+				Enabled:           true,
+				CooldownPeriod:    300,
+				MaxWarningsPerDay: 5,
+				AggregationPeriod: 15,
+				CriticalThreshold: 3,
+				WarningWindow:     30, // Default value for warning throttle window
 			},
 			Email: EmailConfig{
-				Enabled:    true,
-				SMTPServer: "mail.dataon.com",
-				SMTPPort:   587,
-				UseTLS:     true,
-				UseSSL:     false,
-				Timeout:    10,
+				Enabled:      true,
+				SMTPServer:   "mail.dataon.com",
+				SMTPPort:     587,
+				UseTLS:       true,
+				UseSSL:       false,
+				UseLoginAuth: true, // Enable by default for Office 365 compatibility
+				Timeout:      10,
 				SenderEmails: []SenderEmail{
 					{
 						Email:    "hadiyatna.muflihun@dataon.com",
@@ -244,7 +252,6 @@ func GetDefaultConfig() *Config {
 				RecipientEmails: []string{"hadiyatna.muflihun@dataon.com"},
 				RetryCount:      3,
 				RetryInterval:   5,
-				TemplateDir:     "templates/email",
 			},
 		},
 		Logs: LogsConfig{

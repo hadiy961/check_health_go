@@ -35,7 +35,7 @@ func (a *Application) Initialize() error {
 		return fmt.Errorf("failed to initialize logger: %w", err)
 	}
 
-	logger.Info("Application initialized successfully")
+	logger.Debug("Application initialized successfully")
 	a.isRunning = true
 	return nil
 }

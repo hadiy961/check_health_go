@@ -65,7 +65,7 @@ func createCPUMonitor(cfg *config.Config) *cpu.Monitor {
 		if err := monitor.StartMonitoring(); err != nil {
 			logger.Warn("Failed to start CPU monitor", logger.String("error", err.Error()))
 		} else {
-			logger.Info("Started CPU monitoring service")
+			logger.Debug("Started CPU monitoring service")
 		}
 	}
 	return monitor
@@ -78,7 +78,7 @@ func createMemoryMonitor(cfg *config.Config) *memory.Monitor {
 		if err := monitor.StartMonitoring(); err != nil {
 			logger.Warn("Failed to start Memory monitor", logger.String("error", err.Error()))
 		} else {
-			logger.Info("Started Memory monitoring service")
+			logger.Debug("Started Memory monitoring service")
 		}
 	}
 	return monitor
@@ -91,7 +91,7 @@ func createDiskMonitor(cfg *config.Config) *disk.Monitor {
 		if err := monitor.StartMonitoring(); err != nil {
 			logger.Warn("Failed to start Disk monitor", logger.String("error", err.Error()))
 		} else {
-			logger.Info("Started Disk monitoring service")
+			logger.Debug("Started Disk monitoring service")
 		}
 	}
 	return monitor
@@ -102,7 +102,7 @@ func createSysInfoMonitor(cfg *config.Config) *sysinfo.Monitor {
 	monitor := sysinfo.NewMonitor(cfg)
 	if monitor != nil {
 		go monitor.StartMonitoring()
-		logger.Info("Started SysInfo monitoring service")
+		logger.Debug("Started SysInfo monitoring service")
 	}
 	return monitor
 }
@@ -117,7 +117,7 @@ func createMariaDBMonitor(cfg *config.Config, ctx context.Context) *mariadb.Moni
 
 	if monitor != nil {
 		go monitor.Start(ctx)
-		logger.Info("Started MariaDB monitoring service")
+		logger.Debug("Started MariaDB monitoring service")
 	}
 	return monitor
 }
