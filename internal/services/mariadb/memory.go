@@ -12,18 +12,21 @@ import (
 
 // GetMariaDBMemoryUsage retrieves memory usage for the MariaDB process
 func GetMariaDBMemoryUsage() (uint64, float64, error) {
-	// First, get the MariaDB process ID using pgrep
-	cmd := exec.Command("pgrep", "-f", "mysqld")
-	output, err := cmd.Output()
-	if err != nil {
-		return 0, 0, fmt.Errorf("failed to find MariaDB process: %w", err)
+	// Try different patterns to find MariaDB process
+	patterns := []string{"mariadb", "maria", "mysqld"}
+
+	var pid int
+	var err error
+
+	for _, pattern := range patterns {
+		pid, err = findProcessByPattern(pattern)
+		if err == nil && pid > 0 {
+			break
+		}
 	}
 
-	// Get the first process ID (there might be multiple matches)
-	pidStr := strings.TrimSpace(strings.Split(string(output), "\n")[0])
-	pid, err := strconv.Atoi(pidStr)
-	if err != nil {
-		return 0, 0, fmt.Errorf("failed to parse MariaDB process ID: %w", err)
+	if err != nil || pid == 0 {
+		return 0, 0, fmt.Errorf("failed to find MariaDB process: no matching process found")
 	}
 
 	// Use gopsutil to get memory info for this process
@@ -47,6 +50,34 @@ func GetMariaDBMemoryUsage() (uint64, float64, error) {
 	percentUsed := float64(memInfo.RSS) / float64(vmStat.Total) * 100.0
 
 	return memInfo.RSS, percentUsed, nil
+}
+
+// findProcessByPattern attempts to find a process ID using the given pattern
+func findProcessByPattern(pattern string) (int, error) {
+	cmd := exec.Command("pgrep", "-f", pattern)
+	output, err := cmd.Output()
+
+	if err != nil {
+		// Check if it's just that no processes were found
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return 0, fmt.Errorf("no processes found matching pattern '%s'", pattern)
+		}
+		return 0, fmt.Errorf("error running pgrep: %w", err)
+	}
+
+	outputStr := strings.TrimSpace(string(output))
+	if outputStr == "" {
+		return 0, fmt.Errorf("no processes found matching pattern '%s'", pattern)
+	}
+
+	// Get the first process ID (there might be multiple matches)
+	pidStr := strings.Split(outputStr, "\n")[0]
+	pid, err := strconv.Atoi(pidStr)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse process ID: %w", err)
+	}
+
+	return pid, nil
 }
 
 // FormatBytes converts bytes to a human-readable string

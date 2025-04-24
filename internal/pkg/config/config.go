@@ -130,6 +130,7 @@ type EmailConfig struct {
 type SenderEmail struct {
 	Email    string `yaml:"email"`
 	Password string `yaml:"password"`
+	RealName string `yaml:"real_name"` // Added real name field for display name in emails
 }
 
 // LogsConfig holds logging configuration

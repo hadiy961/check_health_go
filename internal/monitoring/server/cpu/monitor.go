@@ -124,16 +124,6 @@ func (m *Monitor) CheckCPU() {
 
 	// Only log detailed information if not a status change but at a lower frequency
 	m.checkCount++
-	if !statusChanged && m.checkCount%60 == 0 { // Log once every ~60 checks
-		logger.Info("CPU status",
-			logger.Float64("usage_percent", info.Usage),
-			logger.String("status", info.CPUStatus),
-			logger.Int("cores", info.Cores),
-			logger.Int("threads", info.Threads),
-			logger.Float64("clock_speed", info.ClockSpeed))
-	}
-
-	// Remove trend analysis code
 
 	// Format timestamp consistently for all messages
 	timestamp := time.Now()
