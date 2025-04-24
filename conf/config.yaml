@@ -12,8 +12,8 @@ agent:
 database:
   host: "localhost"
   port: 3306
-  username: "root"
-  password: "DataOn24!!"
+  username: "backup_user"
+  password: "backup_pwd"
   database: "information_schema"
 
 monitoring:
@@ -25,14 +25,14 @@ monitoring:
     
   memory:
     enabled: true
-    warning_threshold: 80.0  # Ambang batas peringatan (dalam persen)
+    warning_threshold: 30.0  # Ambang batas peringatan (dalam persen)
     critical_threshold: 90.0 # Ambang batas kritis (dalam persen)
     check_interval: 1        # Interval pengecekan RAM (dalam detik)
-  
+
   disk:
     enabled: true
-    warning_threshold: 80.0
-    critical_threshold: 90.0
+    warning_threshold: 30.0
+    critical_threshold: 40.0
     check_interval: 1
     
   io_stats:
@@ -42,40 +42,49 @@ monitoring:
   mariadb:
     enabled: true
     service_name: "mariadb" # Nama service MariaDB
-    auto_restart: true      # Add this line to enable auto-restart
+    auto_restart: false      # Add this line to enable auto-restart
     restart_on_threshold: 
       enabled: true         # Aktifkan restart otomatis saat memory mencapai critical
       threshold: "critical" # Level at which to restart (warning/critical)
     check_interval: 1       # Interval pengecekan MariaDB (dalam detik)
-    log_path: "/var/log/mysql/error.log" # Path ke log MariaDB
+    log_path: "/var/lib/mysql/mysql/mysql_error.log" # Path ke log MariaDB
 
 notifications:
   throttling:
     enabled: true
     cooldown_period: 43200  # Jangan kirim notifikasi serupa dalam 12 jam
+    max_warnings_per_day: 5 # Maximum warnings per service per day
+    aggregation_period: 15  # Aggregate warnings over this many minutes
+    critical_threshold: 3   # Require this many consecutive critical events to send alert
+    warning_escalation: 10  # Jumlah warning sebelum escalation
+    warning_window: 2      # Jendela waktu antara warning alerts
   
   email:
     enabled: true
-    smtp_server: "mail.dataon.com"
+    provider: "mutt"  # Use "smtp" or "mutt"
+    smtp_server: "smtp-mail.outlook.com"
     smtp_port: 587
     use_tls: true
-    use_ssl: false
-    timeout: 10
+    use_ssl: false   # Set to false since we're using TLS with port 587
+    use_login_auth: true  # Use LOGIN authentication for Office 365/Outlook
+    timeout: 120     # Increased timeout to 120 seconds for RHEL networks
+    mutt_path: "/usr/bin/mutt"  # Verify this path is correct
     sender_emails:
-      - email: "hadiyatna.muflihun@dataon.com"
-        password: "HadiyatnaMuflihun24!@#"
+      - email: "sdm.hrispst@jamkrindo.co.id"
+        password: "5dm0ps2024!"
+        real_name: "ALERT JAMKRINDO"
     recipient_emails:
       - "hadiyatna.muflihun@dataon.com"
+      - "teguh.triharto@dataon.com"
     retry_count: 3
-    retry_interval: 5
-    template_dir: "templates/email"
+    retry_interval: 30  # Increased retry interval to 30 seconds for RHEL
 
 logs:
   enabled: true
-  level: "info"     # Level logging (debug, info, warn, error)
+  level: "info"     # Ensure this is set to "debug"
   file_path: "logs"  # Lokasi file log
   format: "json"     # Format log (json atau text)
-  stdout: true       # Log ke console juga
+  stdout: true       # Ensure this is true to see logs in the console
 
 api:
   rate_limit: 100    # Request per menit
