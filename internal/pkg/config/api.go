@@ -2,8 +2,7 @@ package config
 
 // API represents API server configuration
 type API struct {
-	RateLimit int `yaml:"rate_limit"`
-	CORS      struct {
+	CORS struct {
 		Enabled        bool     `yaml:"enabled"`
 		AllowedOrigins []string `yaml:"allowed_origins"`
 		AllowedMethods []string `yaml:"allowed_methods"`
